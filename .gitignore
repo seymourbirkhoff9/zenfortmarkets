@@ -2,3 +2,6 @@ backend/.venv/
 .env
 __pycache__/
 *.pyc
+backend/create_admin_user.py
+backend/credit_user_wallet.py
+backend/test_compliance_endpoints.py

@@ -5,14 +5,25 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 from sqlalchemy import (
-    Column, String, Boolean, DateTime, Numeric, ForeignKey, Text, func
+    Column, String, Boolean, DateTime, Numeric, ForeignKey, Text, func, Enum as SQLEnum
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, DeclarativeBase
+import enum
 
 
 class Base(DeclarativeBase):
     pass
+
+
+# ──────────────────────────────────────────────
+# Enums
+# ──────────────────────────────────────────────
+class KYCStatus(enum.Enum):
+    UNVERIFIED = "UNVERIFIED"
+    PENDING = "PENDING"
+    VERIFIED = "VERIFIED"
+    REJECTED = "REJECTED"
 
 
 # ──────────────────────────────────────────────
@@ -30,6 +41,12 @@ class User(Base):
     is_verified = Column(Boolean, default=False)
     country = Column(String(100), nullable=True)
     phone = Column(String(50), nullable=True)
+    # Compliance & Governance fields
+    kyc_status = Column(SQLEnum(KYCStatus), default=KYCStatus.UNVERIFIED, nullable=False)
+    kyc_document_url = Column(String(500), nullable=True)
+    is_blocked = Column(Boolean, default=False)
+    can_withdraw = Column(Boolean, default=True)
+    can_deposit = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

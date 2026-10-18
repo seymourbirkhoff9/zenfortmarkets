@@ -10,6 +10,16 @@ from pydantic import BaseModel, EmailStr, field_validator, model_validator
 
 
 # ──────────────────────────────────────────────
+# KYC Status Enum
+# ──────────────────────────────────────────────
+class KYCStatus(str, Enum):
+    UNVERIFIED = "UNVERIFIED"
+    PENDING = "PENDING"
+    VERIFIED = "VERIFIED"
+    REJECTED = "REJECTED"
+
+
+# ──────────────────────────────────────────────
 # Country Enum — drives the Swagger dropdown + currency resolution
 # ──────────────────────────────────────────────
 class CountryEnum(str, Enum):
@@ -155,6 +165,11 @@ class UserOut(BaseModel):
     is_verified: bool
     country: Optional[str] = None
     phone: Optional[str] = None
+    kyc_status: KYCStatus
+    kyc_document_url: Optional[str] = None
+    is_blocked: bool
+    can_withdraw: bool
+    can_deposit: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -246,3 +261,29 @@ class AdminCreditRequest(BaseModel):
     wallet_type: Literal["main", "profit"]
     amount: Decimal
     description: Optional[str] = None
+
+
+class AdminDebitRequest(BaseModel):
+    user_email: EmailStr
+    wallet_type: Literal["main", "profit"]
+    amount: Decimal
+    description: Optional[str] = None
+
+    @field_validator("amount")
+    @classmethod
+    def positive_amount(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("Amount must be positive.")
+        return v
+
+
+class AdminUserStatusUpdate(BaseModel):
+    is_blocked: Optional[bool] = None
+    can_withdraw: Optional[bool] = None
+    can_deposit: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class AdminKYCReviewRequest(BaseModel):
+    status: Literal[KYCStatus.VERIFIED, KYCStatus.REJECTED]
+    rejection_reason: Optional[str] = None
