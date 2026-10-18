@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard — Zenfort Markets</title>
+    <link rel="stylesheet" href="/static/css/main.css" />
+</head>
+
+<body class="app-layout">
+    <aside id="sidebar">
+        <div class="brand">Zenfort</div>
+        <nav>
+            <a href="/dashboard" class="active">Overview</a>
+            <a href="/dashboard/wallets">Wallets</a>
+            <a href="/dashboard/investments">Investments</a>
+            <a href="/dashboard/transfer">Transfer</a>
+            <a href="/logout">Logout</a>
+        </nav>
+    </aside>
+
+    <main id="main-content">
+        <header class="page-header">
+            <h1>Dashboard</h1>
+            <span id="user-greeting">Welcome back!</span>
+        </header>
+
+        <!-- Wallet summary cards -->
+        <section id="wallet-summary" class="grid-2">
+            <div class="wallet-card main" id="main-wallet-card">
+                <span class="label">Main Wallet</span>
+                <span class="balance" id="main-balance">$0.00</span>
+            </div>
+            <div class="wallet-card profit" id="profit-wallet-card">
+                <span class="label">Profit Wallet</span>
+                <span class="balance" id="profit-balance">$0.00</span>
+            </div>
+        </section>
+
+        <!-- Recent transactions -->
+        <section id="recent-transactions">
+            <h2>Recent Transactions</h2>
+            <table id="tx-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Type</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="tx-body"><!-- populated by JS --></tbody>
+            </table>
+        </section>
+    </main>
+
+    <script src="/static/js/dashboard.js"></script>
+</body>
+
+</html>
