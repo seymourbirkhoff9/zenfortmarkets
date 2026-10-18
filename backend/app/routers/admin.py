@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import User, Wallet, Transaction, KYCStatus
-from app.schemas import UserOut, AdminCreditRequest, AdminDebitRequest, AdminUserStatusUpdate, AdminKYCReviewRequest, TransactionOut
+from app.schemas import UserOut, AdminCreditRequest, AdminDebitRequest, AdminUserStatusUpdate, AdminKYCReviewRequest, TransactionOut, AdminDepositReviewRequest
 from app.security import get_current_admin
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
@@ -228,3 +228,68 @@ def review_kyc(
     db.commit()
     db.refresh(user)
     return user
+
+
+# ──────────────────────────────────────────────
+# GET /api/admin/deposits/pending — List pending deposits
+# ──────────────────────────────────────────────
+@router.get("/deposits/pending", response_model=List[TransactionOut])
+def list_pending_deposits(
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Return all pending deposit transactions ordered by created_at descending."""
+    return (
+        db.query(Transaction)
+        .filter(Transaction.tx_type == "deposit", Transaction.status == "pending")
+        .order_by(Transaction.created_at.desc())
+        .all()
+    )
+
+
+# ──────────────────────────────────────────────
+# PATCH /api/admin/deposits/{transaction_id}/review — Review deposit
+# ──────────────────────────────────────────────
+@router.patch("/deposits/{transaction_id}/review", response_model=TransactionOut)
+def review_deposit(
+    transaction_id: str,
+    payload: AdminDepositReviewRequest,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Review and approve/reject a pending deposit transaction.
+
+    If approved: Update transaction to "completed" and credit user's main wallet.
+    If rejected: Update transaction to "rejected" with rejection reason.
+    """
+    # Fetch the pending transaction
+    tx = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+    if tx.tx_type != "deposit":
+        raise HTTPException(status_code=400, detail="Transaction is not a deposit.")
+    if tx.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Transaction is not pending. Current status: {tx.status}")
+
+    # Process based on review status
+    if payload.status in ["approved", "completed"]:
+        # Get the wallet to credit
+        wallet = db.query(Wallet).filter(Wallet.id == tx.receiver_wallet_id).first()
+        if not wallet:
+            raise HTTPException(status_code=404, detail="Associated wallet not found.")
+
+        # Credit the wallet
+        wallet.balance += tx.amount
+        tx.status = "completed"
+
+    elif payload.status == "rejected":
+        tx.status = "rejected"
+        if payload.rejection_reason:
+            tx.rejection_reason = payload.rejection_reason
+    else:
+        raise HTTPException(status_code=400, detail="Invalid status. Must be 'approved', 'completed', or 'rejected'.")
+
+    db.commit()
+    db.refresh(tx)
+    return tx

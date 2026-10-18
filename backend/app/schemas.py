@@ -224,6 +224,10 @@ class TransactionOut(BaseModel):
     tx_type: str
     description: Optional[str]
     status: str
+    gateway_name: Optional[str] = None
+    tx_hash: Optional[str] = None
+    proof_image_url: Optional[str] = None
+    rejection_reason: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -286,4 +290,31 @@ class AdminUserStatusUpdate(BaseModel):
 
 class AdminKYCReviewRequest(BaseModel):
     status: Literal[KYCStatus.VERIFIED, KYCStatus.REJECTED]
+    rejection_reason: Optional[str] = None
+
+
+# ──────────────────────────────────────────────
+# Phase 2: KYC & Manual Deposit Schemas
+# ──────────────────────────────────────────────
+class KYCSubmitRequest(BaseModel):
+    kyc_document_url: str
+
+
+class DepositCreateRequest(BaseModel):
+    amount: Decimal
+    currency: str
+    gateway_name: str
+    tx_hash: str
+    proof_image_url: Optional[str] = None
+
+    @field_validator("amount")
+    @classmethod
+    def positive_amount(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("Amount must be positive.")
+        return v
+
+
+class AdminDepositReviewRequest(BaseModel):
+    status: Literal["approved", "completed", "rejected"]
     rejection_reason: Optional[str] = None

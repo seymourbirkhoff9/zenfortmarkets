@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from decimal import Decimal
 
 from app.database import get_db
-from app.models import User, Wallet
-from app.schemas import SignUpRequest, LoginRequest, TokenResponse, UserOut
+from app.models import User, Wallet, KYCStatus
+from app.schemas import SignUpRequest, LoginRequest, TokenResponse, UserOut, KYCSubmitRequest
 from app.security import hash_password, verify_password, create_access_token, get_current_user
 from app.services.email import send_welcome_email
 from app.utils.country_currency import get_currency_for_country
@@ -116,4 +116,30 @@ def delete_account(
     """
     db.delete(current_user)
     db.commit()
+
+
+@router.post("/kyc/submit", response_model=UserOut, status_code=status.HTTP_200_OK)
+def submit_kyc(
+    payload: KYCSubmitRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Submit KYC document for verification.
+
+    Updates the user's kyc_status from UNVERIFIED or REJECTED to PENDING,
+    and saves the kyc_document_url.
+    """
+    # Only allow submission if current status is UNVERIFIED or REJECTED
+    if current_user.kyc_status not in [KYCStatus.UNVERIFIED, KYCStatus.REJECTED]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"KYC cannot be submitted. Current status: {current_user.kyc_status.value}",
+        )
+
+    current_user.kyc_document_url = payload.kyc_document_url
+    current_user.kyc_status = KYCStatus.PENDING
+    db.commit()
+    db.refresh(current_user)
+    return current_user
 

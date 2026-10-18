@@ -87,9 +87,14 @@ class Transaction(Base):
     receiver_wallet_id = Column(UUID(as_uuid=True), ForeignKey("wallets.id"), nullable=True)
     amount = Column(Numeric(precision=20, scale=8), nullable=False)
     currency = Column(String(10), nullable=False, default="USD")
-    tx_type = Column(String(50), nullable=False)  # "transfer" | "p2p" | "deposit" | "withdrawal"
+    tx_type = Column(String(50), nullable=False)  # "transfer" | "p2p" | "deposit" | "withdrawal" | "admin_debit"
     description = Column(Text, nullable=True)
-    status = Column(String(20), nullable=False, default="completed")
+    status = Column(String(20), nullable=False, default="completed")  # "pending" | "completed" | "rejected"
+    # Manual deposit fields
+    gateway_name = Column(String(50), nullable=True)  # e.g., "BTC", "USDT_TRC20"
+    tx_hash = Column(String(255), nullable=True)
+    proof_image_url = Column(String(500), nullable=True)
+    rejection_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     sender_wallet = relationship("Wallet", foreign_keys=[sender_wallet_id], back_populates="debit_transactions")

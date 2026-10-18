@@ -14,6 +14,7 @@ from app.schemas import (
     ExchangeRequest,
     P2PTransferRequest,
     TransactionOut,
+    DepositCreateRequest,
 )
 from app.security import get_current_user
 from app.services.email import send_p2p_transfer_notification
@@ -160,3 +161,51 @@ def list_transactions(
         .all()
     )
     return txs
+
+
+# ──────────────────────────────────────────────
+# POST /api/deposits/ — Manual Deposit Submission
+# ──────────────────────────────────────────────
+@router.post("/deposits/", response_model=TransactionOut, status_code=status.HTTP_201_CREATED)
+def create_deposit(
+    payload: DepositCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Submit a manual deposit request for admin review.
+
+    Checks if user is not blocked and can_deposit is True.
+    Creates a pending transaction with gateway details.
+    """
+    # Verify user account status
+    if current_user.is_blocked:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is blocked. Contact support.",
+        )
+    if not current_user.can_deposit:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Deposits are disabled for this account.",
+        )
+
+    # Get user's main wallet
+    main_wallet = _get_wallet(db, current_user.id, "main")
+
+    # Create pending deposit transaction
+    tx = Transaction(
+        receiver_wallet_id=main_wallet.id,
+        amount=payload.amount,
+        currency=payload.currency,
+        tx_type="deposit",
+        description=f"Manual deposit via {payload.gateway_name}",
+        status="pending",
+        gateway_name=payload.gateway_name,
+        tx_hash=payload.tx_hash,
+        proof_image_url=payload.proof_image_url,
+    )
+    db.add(tx)
+    db.commit()
+    db.refresh(tx)
+    return tx
