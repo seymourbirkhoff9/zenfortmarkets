@@ -164,3 +164,18 @@ class Notification(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="notifications")
+
+
+# ──────────────────────────────────────────────
+# Broadcast Logs (Admin email broadcast history)
+# ──────────────────────────────────────────────
+class BroadcastLog(Base):
+    __tablename__ = "broadcast_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    admin_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    subject = Column(String(255), nullable=False)
+    body = Column(Text, nullable=False)
+    target_filter = Column(String(50), nullable=False, default="all")  # "all", "verified_kyc", "active_investors", "unverified_kyc"
+    recipient_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

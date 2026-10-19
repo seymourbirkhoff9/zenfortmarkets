@@ -324,6 +324,32 @@ class NotificationResponse(BaseModel):
 
 
 # ──────────────────────────────────────────────
+# Phase 6: Admin Email Broadcast
+# ──────────────────────────────────────────────
+class AdminSendUserEmailRequest(BaseModel):
+    user_id: uuid.UUID
+    subject: str
+    body: str
+
+
+class AdminBroadcastEmailRequest(BaseModel):
+    subject: str
+    body: str
+    target_filter: str = "all"  # "all", "verified_kyc", "active_investors", "unverified_kyc"
+
+
+class BroadcastLogResponse(BaseModel):
+    id: uuid.UUID
+    admin_id: uuid.UUID
+    subject: str
+    target_filter: str
+    recipient_count: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ──────────────────────────────────────────────
 # Admin
 # ──────────────────────────────────────────────
 class AdminCreditRequest(BaseModel):
