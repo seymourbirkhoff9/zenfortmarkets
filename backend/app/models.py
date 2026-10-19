@@ -47,12 +47,18 @@ class User(Base):
     is_blocked = Column(Boolean, default=False)
     can_withdraw = Column(Boolean, default=True)
     can_deposit = Column(Boolean, default=True)
+    # Referral Program fields
+    referral_code = Column(String(8), unique=True, nullable=False, index=True)
+    referred_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    referral_count = Column(Integer, default=0, nullable=False)
+    total_referral_earned = Column(Numeric(18, 8), default=Decimal("0.00"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     wallets = relationship("Wallet", back_populates="user", cascade="all, delete-orphan")
     user_investments = relationship("UserInvestment", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+    referred_users = relationship("User", backref="referrer", remote_side=[id])
 
 
 # ──────────────────────────────────────────────

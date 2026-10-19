@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from decimal import Decimal
+import random
+import string
 
 from app.database import get_db
 from app.models import User, Wallet, KYCStatus
@@ -14,6 +16,15 @@ from app.services.email import send_welcome_email
 from app.utils.country_currency import get_currency_for_country
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
+
+
+def _generate_unique_referral_code(db: Session) -> str:
+    """Generate a unique 8-character uppercase alphanumeric referral code."""
+    while True:
+        code = "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        existing = db.query(User).filter(User.referral_code == code).first()
+        if not existing:
+            return code
 
 
 def _init_wallets(db: Session, user_id, currency: str = "USD") -> None:
@@ -49,8 +60,21 @@ def signup(
             detail="An account with this email already exists.",
         )
 
+    # Handle referral code if provided
+    referrer = None
+    if payload.referral_code:
+        referrer = db.query(User).filter(User.referral_code == payload.referral_code).first()
+        if not referrer:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid referral code.",
+            )
+
     # Resolve the user's local currency — never raises, falls back to USD
     currency = get_currency_for_country(payload.country)
+
+    # Generate unique referral code for new user
+    referral_code = _generate_unique_referral_code(db)
 
     user = User(
         email=payload.email,
@@ -61,10 +85,18 @@ def signup(
         is_active=True,
         is_admin=False,
         is_verified=False,
+        referral_code=referral_code,
+        referred_by_id=referrer.id if referrer else None,
     )
     db.add(user)
     db.flush()                          # populate user.id before wallet FK
     _init_wallets(db, user.id, currency)
+
+    # Increment referrer's referral count
+    if referrer:
+        referrer.referral_count += 1
+        db.flush()
+
     db.commit()
     db.refresh(user)
 

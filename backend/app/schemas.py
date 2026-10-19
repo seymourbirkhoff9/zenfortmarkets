@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 from pydantic import BaseModel, EmailStr, field_validator, model_validator
 
 
@@ -115,6 +115,7 @@ class SignUpRequest(BaseModel):
     confirm_password: str
     country: CountryEnum              # Swagger renders this as a dropdown (JSON body)
     phone: Optional[str] = None
+    referral_code: Optional[str] = None
 
     # ADD THIS VALIDATOR HERE:
     @field_validator("country", mode="before")
@@ -170,6 +171,7 @@ class UserOut(BaseModel):
     is_blocked: bool
     can_withdraw: bool
     can_deposit: bool
+    referral_code: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -377,6 +379,37 @@ class AuditLogResponse(BaseModel):
     action: str
     target_user_id: Optional[uuid.UUID]
     details: Optional[str]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ──────────────────────────────────────────────
+# Phase 8: Referral Program & Leaderboard
+# ──────────────────────────────────────────────
+class ReferredUser(BaseModel):
+    id: uuid.UUID
+    email: str
+    full_name: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ReferralStatsResponse(BaseModel):
+    referral_code: str
+    referral_link: str
+    total_referrals: int
+    total_earned: Decimal
+    referred_users: List[ReferredUser]
+
+    model_config = {"from_attributes": True}
+
+
+class LeaderboardEntry(BaseModel):
+    rank: int
+    username: str
+    metric_value: Decimal
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -19,6 +19,7 @@ from app.schemas import (
     AuditLogResponse,
 )
 from app.services.notification_service import send_notification_and_email
+from app.services.referral_service import process_referral_milestone
 from app.security import get_current_admin
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
@@ -494,6 +495,10 @@ def review_deposit(
             target_user_id=str(user.id) if user else None,
             details=f"Approved deposit {tx.id}: {tx.amount} {tx.currency}",
         )
+
+        # Process referral milestone (first deposit)
+        if user:
+            process_referral_milestone(db, user, "first_deposit", tx.amount)
 
         # Send notification and email
         if user:

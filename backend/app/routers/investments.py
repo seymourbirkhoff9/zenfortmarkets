@@ -13,6 +13,7 @@ from app.database import get_db
 from app.models import User, Wallet, InvestmentPlan, UserInvestment, Transaction
 from app.schemas import InvestmentPlanResponse, InvestRequest, UserInvestmentResponse
 from app.security import get_current_user
+from app.services.referral_service import process_referral_milestone
 
 router = APIRouter(prefix="/api/investments", tags=["Investments"])
 
@@ -129,6 +130,10 @@ def create_investment(
 
     db.commit()
     db.refresh(investment)
+
+    # Process referral milestone (first investment)
+    process_referral_milestone(db, current_user, "first_investment", amount)
+
     return investment
 
 
