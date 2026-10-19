@@ -12,7 +12,7 @@ from app.database import engine
 from app.models import Base
 
 # Import routers
-from app.routers import auth, wallets, investments, admin
+from app.routers import auth, wallets, investments, admin, notifications
 
 logger = logging.getLogger("zenfort.startup")
 
@@ -67,6 +67,7 @@ app.include_router(auth.router)
 app.include_router(wallets.router)
 app.include_router(investments.router)
 app.include_router(admin.router)
+app.include_router(notifications.router)
 
 
 # ──────────────────────────────────────────────

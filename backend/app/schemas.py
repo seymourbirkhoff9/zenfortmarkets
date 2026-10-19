@@ -310,6 +310,20 @@ class UserInvestmentResponse(BaseModel):
 
 
 # ──────────────────────────────────────────────
+# Phase 5: Notifications
+# ──────────────────────────────────────────────
+class NotificationResponse(BaseModel):
+    id: uuid.UUID
+    title: str
+    message: str
+    type: str
+    is_read: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ──────────────────────────────────────────────
 # Admin
 # ──────────────────────────────────────────────
 class AdminCreditRequest(BaseModel):

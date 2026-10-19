@@ -17,6 +17,7 @@ from app.schemas import (
     AdminWithdrawalReviewRequest,
     InvestmentPlanCreate, InvestmentPlanUpdate, InvestmentPlanResponse,
 )
+from app.services.notification_service import send_notification_and_email
 from app.security import get_current_admin
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
@@ -86,6 +87,11 @@ def update_user_status(
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
 
+    # Track changes for notifications
+    was_blocked = user.is_blocked
+    could_withdraw = user.can_withdraw
+    could_deposit = user.can_deposit
+
     # Update only provided fields
     if payload.is_blocked is not None:
         user.is_blocked = payload.is_blocked
@@ -98,6 +104,88 @@ def update_user_status(
 
     db.commit()
     db.refresh(user)
+
+    # Send notifications for status changes
+    if payload.is_blocked is not None and user.is_blocked != was_blocked:
+        if user.is_blocked:
+            send_notification_and_email(
+                db=db,
+                user=user,
+                title="Account Blocked",
+                message="Your account has been blocked. Please contact support for assistance.",
+                notification_type="account",
+                email_subject="Account Blocked - Zenfort Markets",
+                email_html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
+                  <h2 style="color:#1a1a3e;">Account Blocked</h2>
+                  <p>Hi {user.full_name},</p>
+                  <p>Your account has been blocked.</p>
+                  <p>Please contact support if you have any questions or believe this is an error.</p>
+                  <hr/>
+                  <small style="color:#888;">Zenfort Markets</small>
+                </div>
+                """,
+            )
+        else:
+            send_notification_and_email(
+                db=db,
+                user=user,
+                title="Account Unblocked",
+                message="Your account has been unblocked. You can now access all platform features.",
+                notification_type="account",
+                email_subject="Account Unblocked - Zenfort Markets",
+                email_html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
+                  <h2 style="color:#1a1a3e;">Account Unblocked</h2>
+                  <p>Hi {user.full_name},</p>
+                  <p>Your account has been unblocked.</p>
+                  <p>You can now access all platform features.</p>
+                  <hr/>
+                  <small style="color:#888;">Zenfort Markets</small>
+                </div>
+                """,
+            )
+
+    if payload.can_withdraw is not None and user.can_withdraw != could_withdraw and not user.can_withdraw:
+        send_notification_and_email(
+            db=db,
+            user=user,
+            title="Withdrawals Disabled",
+            message="Your withdrawal privileges have been temporarily disabled. Please contact support for assistance.",
+            notification_type="account",
+            email_subject="Withdrawals Disabled - Zenfort Markets",
+            email_html=f"""
+            <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
+              <h2 style="color:#1a1a3e;">Withdrawals Disabled</h2>
+              <p>Hi {user.full_name},</p>
+              <p>Your withdrawal privileges have been temporarily disabled.</p>
+              <p>Please contact support if you have any questions.</p>
+              <hr/>
+              <small style="color:#888;">Zenfort Markets</small>
+            </div>
+            """,
+        )
+
+    if payload.can_deposit is not None and user.can_deposit != could_deposit and not user.can_deposit:
+        send_notification_and_email(
+            db=db,
+            user=user,
+            title="Deposits Disabled",
+            message="Your deposit privileges have been temporarily disabled. Please contact support for assistance.",
+            notification_type="account",
+            email_subject="Deposits Disabled - Zenfort Markets",
+            email_html=f"""
+            <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
+              <h2 style="color:#1a1a3e;">Deposits Disabled</h2>
+              <p>Hi {user.full_name},</p>
+              <p>Your deposit privileges have been temporarily disabled.</p>
+              <p>Please contact support if you have any questions.</p>
+              <hr/>
+              <small style="color:#888;">Zenfort Markets</small>
+            </div>
+            """,
+        )
+
     return user
 
 
@@ -234,6 +322,49 @@ def review_kyc(
 
     db.commit()
     db.refresh(user)
+
+    # Send notification and email
+    if payload.status.value == "VERIFIED":
+        send_notification_and_email(
+            db=db,
+            user=user,
+            title="KYC Verification Approved",
+            message="Your KYC verification has been approved. You can now access all platform features.",
+            notification_type="kyc",
+            email_subject="KYC Verification Approved - Zenfort Markets",
+            email_html=f"""
+            <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
+              <h2 style="color:#1a1a3e;">KYC Verification Approved</h2>
+              <p>Hi {user.full_name},</p>
+              <p>Your KYC verification has been successfully approved.</p>
+              <p>You can now access all platform features including deposits, withdrawals, and investments.</p>
+              <hr/>
+              <small style="color:#888;">Zenfort Markets</small>
+            </div>
+            """,
+        )
+    elif payload.status.value == "REJECTED":
+        reason = payload.rejection_reason or "Please resubmit your documents."
+        send_notification_and_email(
+            db=db,
+            user=user,
+            title="KYC Verification Rejected",
+            message=f"Your KYC verification was rejected. Reason: {reason}",
+            notification_type="kyc",
+            email_subject="KYC Verification Rejected - Zenfort Markets",
+            email_html=f"""
+            <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
+              <h2 style="color:#1a1a3e;">KYC Verification Rejected</h2>
+              <p>Hi {user.full_name},</p>
+              <p>Your KYC verification was rejected.</p>
+              <p><strong>Reason:</strong> {reason}</p>
+              <p>Please review the requirements and resubmit your documents.</p>
+              <hr/>
+              <small style="color:#888;">Zenfort Markets</small>
+            </div>
+            """,
+        )
+
     return user
 
 
@@ -286,19 +417,74 @@ def review_deposit(
         if not wallet:
             raise HTTPException(status_code=404, detail="Associated wallet not found.")
 
+        # Get the user
+        user = db.query(User).filter(User.id == wallet.user_id).first()
+
         # Credit the wallet
         wallet.balance += tx.amount
         tx.status = "completed"
+
+        db.commit()
+        db.refresh(tx)
+
+        # Send notification and email
+        if user:
+            send_notification_and_email(
+                db=db,
+                user=user,
+                title="Deposit Approved",
+                message=f"Your deposit of {tx.amount} {tx.currency} has been approved and credited to your wallet.",
+                notification_type="deposit",
+                email_subject=f"Deposit Approved - {tx.amount} {tx.currency}",
+                email_html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
+                  <h2 style="color:#1a1a3e;">Deposit Approved</h2>
+                  <p>Hi {user.full_name},</p>
+                  <p>Your deposit of <strong>{tx.amount} {tx.currency}</strong> has been approved.</p>
+                  <p>The funds have been credited to your wallet.</p>
+                  <hr/>
+                  <small style="color:#888;">Zenfort Markets</small>
+                </div>
+                """,
+            )
 
     elif payload.status == "rejected":
         tx.status = "rejected"
         if payload.rejection_reason:
             tx.rejection_reason = payload.rejection_reason
+
+        # Get the user
+        wallet = db.query(Wallet).filter(Wallet.id == tx.receiver_wallet_id).first()
+        user = db.query(User).filter(User.id == wallet.user_id).first() if wallet else None
+
+        db.commit()
+        db.refresh(tx)
+
+        # Send notification and email
+        if user:
+            reason = payload.rejection_reason or "Please contact support for details."
+            send_notification_and_email(
+                db=db,
+                user=user,
+                title="Deposit Rejected",
+                message=f"Your deposit of {tx.amount} {tx.currency} was rejected. Reason: {reason}",
+                notification_type="deposit",
+                email_subject=f"Deposit Rejected - {tx.amount} {tx.currency}",
+                email_html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
+                  <h2 style="color:#1a1a3e;">Deposit Rejected</h2>
+                  <p>Hi {user.full_name},</p>
+                  <p>Your deposit of <strong>{tx.amount} {tx.currency}</strong> was rejected.</p>
+                  <p><strong>Reason:</strong> {reason}</p>
+                  <p>Please contact support if you have any questions.</p>
+                  <hr/>
+                  <small style="color:#888;">Zenfort Markets</small>
+                </div>
+                """,
+            )
     else:
         raise HTTPException(status_code=400, detail="Invalid status. Must be 'approved', 'completed', or 'rejected'.")
 
-    db.commit()
-    db.refresh(tx)
     return tx
 
 
@@ -349,6 +535,9 @@ def review_withdrawal(
     if not wallet:
         raise HTTPException(status_code=404, detail="Associated wallet not found.")
 
+    # Get the user
+    user = db.query(User).filter(User.id == wallet.user_id).first()
+
     # Process based on review status
     if payload.status in ["approved", "completed"]:
         # Approve: Mark as completed and save payout reference
@@ -356,17 +545,65 @@ def review_withdrawal(
         if payload.payout_tx_hash:
             tx.payout_tx_hash = payload.payout_tx_hash
 
+        db.commit()
+        db.refresh(tx)
+
+        # Send notification and email
+        if user:
+            send_notification_and_email(
+                db=db,
+                user=user,
+                title="Withdrawal Approved",
+                message=f"Your withdrawal of {tx.amount} {tx.currency} has been approved and processed.",
+                notification_type="withdrawal",
+                email_subject=f"Withdrawal Approved - {tx.amount} {tx.currency}",
+                email_html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
+                  <h2 style="color:#1a1a3e;">Withdrawal Approved</h2>
+                  <p>Hi {user.full_name},</p>
+                  <p>Your withdrawal of <strong>{tx.amount} {tx.currency}</strong> has been approved.</p>
+                  <p>The funds have been sent to your withdrawal address.</p>
+                  <hr/>
+                  <small style="color:#888;">Zenfort Markets</small>
+                </div>
+                """,
+            )
+
     elif payload.status == "rejected":
         # Reject: Refund the amount back to the wallet
         wallet.balance += tx.amount
         tx.status = "rejected"
         if payload.rejection_reason:
             tx.rejection_reason = payload.rejection_reason
+
+        db.commit()
+        db.refresh(tx)
+
+        # Send notification and email
+        if user:
+            reason = payload.rejection_reason or "Please contact support for details."
+            send_notification_and_email(
+                db=db,
+                user=user,
+                title="Withdrawal Rejected",
+                message=f"Your withdrawal of {tx.amount} {tx.currency} was rejected. Reason: {reason}. The amount has been refunded to your wallet.",
+                notification_type="withdrawal",
+                email_subject=f"Withdrawal Rejected - {tx.amount} {tx.currency}",
+                email_html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
+                  <h2 style="color:#1a1a3e;">Withdrawal Rejected</h2>
+                  <p>Hi {user.full_name},</p>
+                  <p>Your withdrawal of <strong>{tx.amount} {tx.currency}</strong> was rejected.</p>
+                  <p><strong>Reason:</strong> {reason}</p>
+                  <p>The amount has been refunded to your wallet.</p>
+                  <hr/>
+                  <small style="color:#888;">Zenfort Markets</small>
+                </div>
+                """,
+            )
     else:
         raise HTTPException(status_code=400, detail="Invalid status. Must be 'approved', 'completed', or 'rejected'.")
 
-    db.commit()
-    db.refresh(tx)
     return tx
 
 
