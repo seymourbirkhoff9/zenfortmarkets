@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import User, Wallet, Transaction, KYCStatus
-from app.schemas import UserOut, AdminCreditRequest, AdminDebitRequest, AdminUserStatusUpdate, AdminKYCReviewRequest, TransactionOut, AdminDepositReviewRequest
+from app.schemas import UserOut, AdminCreditRequest, AdminDebitRequest, AdminUserStatusUpdate, AdminKYCReviewRequest, TransactionOut, AdminDepositReviewRequest, AdminWithdrawalReviewRequest
 from app.security import get_current_admin
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
@@ -284,6 +284,74 @@ def review_deposit(
         tx.status = "completed"
 
     elif payload.status == "rejected":
+        tx.status = "rejected"
+        if payload.rejection_reason:
+            tx.rejection_reason = payload.rejection_reason
+    else:
+        raise HTTPException(status_code=400, detail="Invalid status. Must be 'approved', 'completed', or 'rejected'.")
+
+    db.commit()
+    db.refresh(tx)
+    return tx
+
+
+# ──────────────────────────────────────────────
+# GET /api/admin/withdrawals/pending — List pending withdrawals
+# ──────────────────────────────────────────────
+@router.get("/withdrawals/pending", response_model=List[TransactionOut])
+def list_pending_withdrawals(
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Return all pending withdrawal transactions ordered by created_at descending."""
+    return (
+        db.query(Transaction)
+        .filter(Transaction.tx_type == "withdrawal", Transaction.status == "pending")
+        .order_by(Transaction.created_at.desc())
+        .all()
+    )
+
+
+# ──────────────────────────────────────────────
+# PATCH /api/admin/withdrawals/{transaction_id}/review — Review withdrawal
+# ──────────────────────────────────────────────
+@router.patch("/withdrawals/{transaction_id}/review", response_model=TransactionOut)
+def review_withdrawal(
+    transaction_id: str,
+    payload: AdminWithdrawalReviewRequest,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Review and approve/reject a pending withdrawal transaction.
+
+    If approved: Update transaction to "completed" and save payout_tx_hash.
+    If rejected: Update transaction to "rejected", attach rejection_reason, and refund the amount to user's Main Wallet.
+    """
+    # Fetch the pending transaction
+    tx = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+    if tx.tx_type != "withdrawal":
+        raise HTTPException(status_code=400, detail="Transaction is not a withdrawal.")
+    if tx.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Transaction is not pending. Current status: {tx.status}")
+
+    # Get the wallet that was debited
+    wallet = db.query(Wallet).filter(Wallet.id == tx.sender_wallet_id).first()
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Associated wallet not found.")
+
+    # Process based on review status
+    if payload.status in ["approved", "completed"]:
+        # Approve: Mark as completed and save payout reference
+        tx.status = "completed"
+        if payload.payout_tx_hash:
+            tx.payout_tx_hash = payload.payout_tx_hash
+
+    elif payload.status == "rejected":
+        # Reject: Refund the amount back to the wallet
+        wallet.balance += tx.amount
         tx.status = "rejected"
         if payload.rejection_reason:
             tx.rejection_reason = payload.rejection_reason

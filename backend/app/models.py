@@ -94,6 +94,9 @@ class Transaction(Base):
     gateway_name = Column(String(50), nullable=True)  # e.g., "BTC", "USDT_TRC20"
     tx_hash = Column(String(255), nullable=True)
     proof_image_url = Column(String(500), nullable=True)
+    # Withdrawal payout fields
+    withdrawal_address = Column(String(255), nullable=True)  # User's withdrawal address
+    payout_tx_hash = Column(String(255), nullable=True)  # Admin's payout transaction reference
     rejection_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

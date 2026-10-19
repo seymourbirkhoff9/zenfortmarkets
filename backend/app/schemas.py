@@ -227,6 +227,8 @@ class TransactionOut(BaseModel):
     gateway_name: Optional[str] = None
     tx_hash: Optional[str] = None
     proof_image_url: Optional[str] = None
+    withdrawal_address: Optional[str] = None
+    payout_tx_hash: Optional[str] = None
     rejection_reason: Optional[str] = None
     created_at: datetime
 
@@ -317,4 +319,27 @@ class DepositCreateRequest(BaseModel):
 
 class AdminDepositReviewRequest(BaseModel):
     status: Literal["approved", "completed", "rejected"]
+    rejection_reason: Optional[str] = None
+
+
+# ──────────────────────────────────────────────
+# Phase 3: Manual Withdrawal Schemas
+# ──────────────────────────────────────────────
+class WithdrawalCreateRequest(BaseModel):
+    amount: Decimal
+    currency: str
+    gateway_name: str
+    withdrawal_address: str
+
+    @field_validator("amount")
+    @classmethod
+    def positive_amount(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("Amount must be positive.")
+        return v
+
+
+class AdminWithdrawalReviewRequest(BaseModel):
+    status: Literal["approved", "completed", "rejected"]
+    payout_tx_hash: Optional[str] = None
     rejection_reason: Optional[str] = None

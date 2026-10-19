@@ -15,6 +15,7 @@ from app.schemas import (
     P2PTransferRequest,
     TransactionOut,
     DepositCreateRequest,
+    WithdrawalCreateRequest,
 )
 from app.security import get_current_user
 from app.services.email import send_p2p_transfer_notification
@@ -204,6 +205,63 @@ def create_deposit(
         gateway_name=payload.gateway_name,
         tx_hash=payload.tx_hash,
         proof_image_url=payload.proof_image_url,
+    )
+    db.add(tx)
+    db.commit()
+    db.refresh(tx)
+    return tx
+
+
+# ──────────────────────────────────────────────
+# POST /api/withdrawals/ — Manual Withdrawal Submission
+# ──────────────────────────────────────────────
+@router.post("/withdrawals/", response_model=TransactionOut, status_code=status.HTTP_201_CREATED)
+def create_withdrawal(
+    payload: WithdrawalCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Submit a manual withdrawal request for admin review.
+
+    Checks if user is not blocked and can_withdraw is True.
+    Verifies sufficient balance in Main Wallet.
+    Atomically debits the wallet and creates a pending withdrawal transaction.
+    """
+    # Verify user account status
+    if current_user.is_blocked:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is blocked. Contact support.",
+        )
+    if not current_user.can_withdraw:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Withdrawals are disabled for this account.",
+        )
+
+    # Get user's main wallet
+    main_wallet = _get_wallet(db, current_user.id, "main")
+
+    # Verify sufficient balance
+    if main_wallet.balance < payload.amount:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Insufficient balance in Main Wallet.",
+        )
+
+    # Atomically debit wallet and create withdrawal transaction
+    main_wallet.balance -= payload.amount
+
+    tx = Transaction(
+        sender_wallet_id=main_wallet.id,
+        amount=payload.amount,
+        currency=payload.currency,
+        tx_type="withdrawal",
+        description=f"Withdrawal via {payload.gateway_name}",
+        status="pending",
+        gateway_name=payload.gateway_name,
+        withdrawal_address=payload.withdrawal_address,
     )
     db.add(tx)
     db.commit()
