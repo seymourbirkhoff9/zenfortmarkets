@@ -2,9 +2,10 @@
 app/routers/wallets.py — Wallet balance, exchange, and P2P transfer endpoints
 """
 from decimal import Decimal
-from typing import List
+from typing import List, Optional
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -16,6 +17,7 @@ from app.schemas import (
     TransactionOut,
     DepositCreateRequest,
     WithdrawalCreateRequest,
+    WalletTransferRequest,
 )
 from app.security import get_current_user
 from app.services.email import send_p2p_transfer_notification
@@ -147,20 +149,34 @@ def p2p_transfer(
 # ──────────────────────────────────────────────
 @router.get("/transactions", response_model=List[TransactionOut])
 def list_transactions(
+    tx_type: Optional[str] = Query(None, description="Filter by transaction type"),
+    status: Optional[str] = Query(None, description="Filter by transaction status"),
+    start_date: Optional[datetime] = Query(None, description="Filter transactions from this date onwards"),
+    end_date: Optional[datetime] = Query(None, description="Filter transactions up to this date"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return all transactions for the current user (sent or received)."""
+    """Return all transactions for the current user (sent or received) with optional filters."""
     wallet_ids = [w.id for w in db.query(Wallet).filter(Wallet.user_id == current_user.id).all()]
-    txs = (
+    query = (
         db.query(Transaction)
         .filter(
             (Transaction.sender_wallet_id.in_(wallet_ids))
             | (Transaction.receiver_wallet_id.in_(wallet_ids))
         )
-        .order_by(Transaction.created_at.desc())
-        .all()
     )
+
+    # Apply optional filters
+    if tx_type:
+        query = query.filter(Transaction.tx_type == tx_type)
+    if status:
+        query = query.filter(Transaction.status == status)
+    if start_date:
+        query = query.filter(Transaction.created_at >= start_date)
+    if end_date:
+        query = query.filter(Transaction.created_at <= end_date)
+
+    txs = query.order_by(Transaction.created_at.desc()).all()
     return txs
 
 
@@ -267,3 +283,72 @@ def create_withdrawal(
     db.commit()
     db.refresh(tx)
     return tx
+
+
+# ──────────────────────────────────────────────
+# POST /api/wallets/transfer — Transfer between own wallets
+# ──────────────────────────────────────────────
+@router.post("/transfer", response_model=List[TransactionOut], status_code=status.HTTP_201_CREATED)
+def transfer_between_wallets(
+    payload: WalletTransferRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Transfer funds between the user's own Main and Profit wallets.
+    Creates two ledger transactions: transfer_out and transfer_in.
+    """
+    # Get source wallet
+    source_wallet = _get_wallet(db, current_user.id, payload.from_wallet)
+    if not source_wallet:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{payload.from_wallet.capitalize()} wallet not found.",
+        )
+
+    # Get destination wallet
+    dest_wallet = _get_wallet(db, current_user.id, payload.to_wallet)
+    if not dest_wallet:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{payload.to_wallet.capitalize()} wallet not found.",
+        )
+
+    # Verify sufficient balance
+    if source_wallet.balance < payload.amount:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Insufficient balance in {payload.from_wallet.capitalize()} Wallet.",
+        )
+
+    # Atomic transfer: debit source, credit destination
+    source_wallet.balance -= payload.amount
+    dest_wallet.balance += payload.amount
+
+    # Create transfer_out transaction
+    tx_out = Transaction(
+        sender_wallet_id=source_wallet.id,
+        amount=payload.amount,
+        currency=source_wallet.currency,
+        tx_type="transfer",
+        description=f"Transfer to {payload.to_wallet} wallet",
+        status="completed",
+    )
+    db.add(tx_out)
+
+    # Create transfer_in transaction
+    tx_in = Transaction(
+        receiver_wallet_id=dest_wallet.id,
+        amount=payload.amount,
+        currency=dest_wallet.currency,
+        tx_type="transfer",
+        description=f"Transfer from {payload.from_wallet} wallet",
+        status="completed",
+    )
+    db.add(tx_in)
+
+    db.commit()
+    db.refresh(tx_out)
+    db.refresh(tx_in)
+
+    return [tx_out, tx_in]

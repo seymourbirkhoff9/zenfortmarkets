@@ -179,3 +179,17 @@ class BroadcastLog(Base):
     target_filter = Column(String(50), nullable=False, default="all")  # "all", "verified_kyc", "active_investors", "unverified_kyc"
     recipient_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# ──────────────────────────────────────────────
+# Audit Logs (System-wide administrative action logs)
+# ──────────────────────────────────────────────
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    admin_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    action = Column(String(100), nullable=False)  # e.g., "BLOCK_USER", "APPROVE_KYC", "CREDIT_WALLET"
+    target_user_id = Column(UUID(as_uuid=True), nullable=True)
+    details = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

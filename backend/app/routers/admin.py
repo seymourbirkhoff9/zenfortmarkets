@@ -10,17 +10,36 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import User, Wallet, Transaction, KYCStatus, InvestmentPlan, UserInvestment
+from app.models import User, Wallet, Transaction, KYCStatus, InvestmentPlan, UserInvestment, AuditLog
 from app.schemas import (
     UserOut, AdminCreditRequest, AdminDebitRequest, AdminUserStatusUpdate,
     AdminKYCReviewRequest, TransactionOut, AdminDepositReviewRequest,
     AdminWithdrawalReviewRequest,
     InvestmentPlanCreate, InvestmentPlanUpdate, InvestmentPlanResponse,
+    AuditLogResponse,
 )
 from app.services.notification_service import send_notification_and_email
 from app.security import get_current_admin
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
+
+
+def _create_audit_log(
+    db: Session,
+    admin_id: str,
+    action: str,
+    target_user_id: str = None,
+    details: str = None,
+):
+    """Helper function to create an audit log entry."""
+    audit_log = AuditLog(
+        admin_id=admin_id,
+        action=action,
+        target_user_id=target_user_id,
+        details=details,
+    )
+    db.add(audit_log)
+    db.commit()
 
 
 # ──────────────────────────────────────────────
@@ -104,6 +123,17 @@ def update_user_status(
 
     db.commit()
     db.refresh(user)
+
+    # Audit log for block/unblock
+    if payload.is_blocked is not None and user.is_blocked != was_blocked:
+        action = "BLOCK_USER" if user.is_blocked else "UNBLOCK_USER"
+        _create_audit_log(
+            db=db,
+            admin_id=admin.id,
+            action=action,
+            target_user_id=user_id,
+            details=f"User account {'blocked' if user.is_blocked else 'unblocked'}",
+        )
 
     # Send notifications for status changes
     if payload.is_blocked is not None and user.is_blocked != was_blocked:
@@ -224,6 +254,16 @@ def credit_user_wallet(
     db.add(tx)
     db.commit()
     db.refresh(tx)
+
+    # Audit log
+    _create_audit_log(
+        db=db,
+        admin_id=admin.id,
+        action="CREDIT_WALLET",
+        target_user_id=str(user.id),
+        details=f"Credited {payload.amount} {wallet.currency} to {payload.wallet_type} wallet",
+    )
+
     return tx
 
 
@@ -287,6 +327,16 @@ def debit_user_wallet(
     db.add(tx)
     db.commit()
     db.refresh(tx)
+
+    # Audit log
+    _create_audit_log(
+        db=db,
+        admin_id=admin.id,
+        action="DEBIT_WALLET",
+        target_user_id=str(user.id),
+        details=f"Debited {payload.amount} {wallet.currency} from {payload.wallet_type} wallet",
+    )
+
     return tx
 
 
@@ -322,6 +372,15 @@ def review_kyc(
 
     db.commit()
     db.refresh(user)
+
+    # Audit log
+    _create_audit_log(
+        db=db,
+        admin_id=admin.id,
+        action="REVIEW_KYC",
+        target_user_id=user_id,
+        details=f"KYC review: {payload.status.value}" + (f" - {payload.rejection_reason}" if payload.rejection_reason else ""),
+    )
 
     # Send notification and email
     if payload.status.value == "VERIFIED":
@@ -427,6 +486,15 @@ def review_deposit(
         db.commit()
         db.refresh(tx)
 
+        # Audit log
+        _create_audit_log(
+            db=db,
+            admin_id=admin.id,
+            action="APPROVE_DEPOSIT",
+            target_user_id=str(user.id) if user else None,
+            details=f"Approved deposit {tx.id}: {tx.amount} {tx.currency}",
+        )
+
         # Send notification and email
         if user:
             send_notification_and_email(
@@ -459,6 +527,15 @@ def review_deposit(
 
         db.commit()
         db.refresh(tx)
+
+        # Audit log
+        _create_audit_log(
+            db=db,
+            admin_id=admin.id,
+            action="REJECT_DEPOSIT",
+            target_user_id=str(user.id) if user else None,
+            details=f"Rejected deposit {tx.id}: {tx.amount} {tx.currency} - {payload.rejection_reason or 'No reason'}",
+        )
 
         # Send notification and email
         if user:
@@ -548,6 +625,15 @@ def review_withdrawal(
         db.commit()
         db.refresh(tx)
 
+        # Audit log
+        _create_audit_log(
+            db=db,
+            admin_id=admin.id,
+            action="APPROVE_WITHDRAWAL",
+            target_user_id=str(user.id) if user else None,
+            details=f"Approved withdrawal {tx.id}: {tx.amount} {tx.currency}",
+        )
+
         # Send notification and email
         if user:
             send_notification_and_email(
@@ -578,6 +664,15 @@ def review_withdrawal(
 
         db.commit()
         db.refresh(tx)
+
+        # Audit log
+        _create_audit_log(
+            db=db,
+            admin_id=admin.id,
+            action="REJECT_WITHDRAWAL",
+            target_user_id=str(user.id) if user else None,
+            details=f"Rejected withdrawal {tx.id}: {tx.amount} {tx.currency} - {payload.rejection_reason or 'No reason'}",
+        )
 
         # Send notification and email
         if user:
@@ -792,3 +887,23 @@ def process_roi(
         "matured": matured_count,
         "timestamp": now.isoformat(),
     }
+
+
+# ──────────────────────────────────────────────
+# GET /api/admin/audit-logs — List system audit logs
+# ──────────────────────────────────────────────
+@router.get("/audit-logs", response_model=List[AuditLogResponse])
+def list_audit_logs(
+    skip: int = 0,
+    limit: int = 100,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Return system-wide administrative action logs ordered by latest first."""
+    return (
+        db.query(AuditLog)
+        .order_by(AuditLog.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )

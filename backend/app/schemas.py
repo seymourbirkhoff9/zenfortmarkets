@@ -350,6 +350,39 @@ class BroadcastLogResponse(BaseModel):
 
 
 # ──────────────────────────────────────────────
+# Phase 7: Wallet Transfers & Audit Logs
+# ──────────────────────────────────────────────
+class WalletTransferRequest(BaseModel):
+    from_wallet: Literal["main", "profit"]
+    to_wallet: Literal["main", "profit"]
+    amount: Decimal
+
+    @field_validator("amount")
+    @classmethod
+    def positive_amount(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("amount must be positive.")
+        return v
+
+    @model_validator(mode="after")
+    def different_wallets(self):
+        if self.from_wallet == self.to_wallet:
+            raise ValueError("from_wallet and to_wallet must be different.")
+        return self
+
+
+class AuditLogResponse(BaseModel):
+    id: uuid.UUID
+    admin_id: uuid.UUID
+    action: str
+    target_user_id: Optional[uuid.UUID]
+    details: Optional[str]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ──────────────────────────────────────────────
 # Admin
 # ──────────────────────────────────────────────
 class AdminCreditRequest(BaseModel):
