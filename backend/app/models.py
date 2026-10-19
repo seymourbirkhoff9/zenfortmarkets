@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 from sqlalchemy import (
-    Column, String, Boolean, DateTime, Numeric, ForeignKey, Text, func, Enum as SQLEnum
+    Column, String, Boolean, DateTime, Numeric, Integer, ForeignKey, Text, func, Enum as SQLEnum
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, DeclarativeBase
@@ -51,7 +51,7 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     wallets = relationship("Wallet", back_populates="user", cascade="all, delete-orphan")
-    investments = relationship("Investment", back_populates="user", cascade="all, delete-orphan")
+    user_investments = relationship("UserInvestment", back_populates="user", cascade="all, delete-orphan")
 
 
 # ──────────────────────────────────────────────
@@ -87,7 +87,7 @@ class Transaction(Base):
     receiver_wallet_id = Column(UUID(as_uuid=True), ForeignKey("wallets.id"), nullable=True)
     amount = Column(Numeric(precision=20, scale=8), nullable=False)
     currency = Column(String(10), nullable=False, default="USD")
-    tx_type = Column(String(50), nullable=False)  # "transfer" | "p2p" | "deposit" | "withdrawal" | "admin_debit"
+    tx_type = Column(String(50), nullable=False)  # "transfer" | "p2p" | "deposit" | "withdrawal" | "admin_debit" | "roi_credit" | "investment" | "principal_return"
     description = Column(Text, nullable=True)
     status = Column(String(20), nullable=False, default="completed")  # "pending" | "completed" | "rejected"
     # Manual deposit fields
@@ -105,19 +105,44 @@ class Transaction(Base):
 
 
 # ──────────────────────────────────────────────
-# Investments
+# Investment Plans (Admin-managed templates)
 # ──────────────────────────────────────────────
-class Investment(Base):
-    __tablename__ = "investments"
+class InvestmentPlan(Base):
+    __tablename__ = "investment_plans"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(100), unique=True, nullable=False, index=True)
+    min_amount = Column(Numeric(precision=20, scale=8), nullable=False)
+    max_amount = Column(Numeric(precision=20, scale=8), nullable=False)
+    daily_roi_percent = Column(Numeric(precision=7, scale=4), nullable=False)
+    duration_days = Column(Integer, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user_investments = relationship("UserInvestment", back_populates="plan")
+
+
+# ──────────────────────────────────────────────
+# User Investments (Subscriptions to plans)
+# ──────────────────────────────────────────────
+class UserInvestment(Base):
+    __tablename__ = "user_investments"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    plan_name = Column(String(100), nullable=False)
-    amount = Column(Numeric(precision=20, scale=8), nullable=False)
-    currency = Column(String(10), nullable=False, default="USD")
-    roi_percent = Column(Numeric(precision=5, scale=2), nullable=False, default=Decimal("0.0"))
-    status = Column(String(20), nullable=False, default="active")  # active | matured | cancelled
-    started_at = Column(DateTime(timezone=True), server_default=func.now())
-    matures_at = Column(DateTime(timezone=True), nullable=True)
+    plan_id = Column(UUID(as_uuid=True), ForeignKey("investment_plans.id"), nullable=False)
 
-    user = relationship("User", back_populates="investments")
+    amount_invested = Column(Numeric(precision=20, scale=8), nullable=False)
+    # Snapshotted at investment time — insulates user from plan changes
+    daily_roi_percent = Column(Numeric(precision=7, scale=4), nullable=False)
+    duration_days = Column(Integer, nullable=False)
+
+    total_earned = Column(Numeric(precision=20, scale=8), nullable=False, default=Decimal("0.0"))
+    status = Column(String(20), nullable=False, default="active")  # "active" | "completed" | "cancelled"
+
+    start_date = Column(DateTime(timezone=True), nullable=False)
+    maturity_date = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="user_investments")
+    plan = relationship("InvestmentPlan", back_populates="user_investments")

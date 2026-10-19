@@ -1,15 +1,22 @@
 """
 app/routers/admin.py — Admin-only management endpoints
 """
+from datetime import datetime, timezone
 from decimal import Decimal
-from typing import List
+from typing import Any, Dict, List
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import User, Wallet, Transaction, KYCStatus
-from app.schemas import UserOut, AdminCreditRequest, AdminDebitRequest, AdminUserStatusUpdate, AdminKYCReviewRequest, TransactionOut, AdminDepositReviewRequest, AdminWithdrawalReviewRequest
+from app.models import User, Wallet, Transaction, KYCStatus, InvestmentPlan, UserInvestment
+from app.schemas import (
+    UserOut, AdminCreditRequest, AdminDebitRequest, AdminUserStatusUpdate,
+    AdminKYCReviewRequest, TransactionOut, AdminDepositReviewRequest,
+    AdminWithdrawalReviewRequest,
+    InvestmentPlanCreate, InvestmentPlanUpdate, InvestmentPlanResponse,
+)
 from app.security import get_current_admin
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
@@ -361,3 +368,190 @@ def review_withdrawal(
     db.commit()
     db.refresh(tx)
     return tx
+
+
+# ──────────────────────────────────────────────
+# POST /api/admin/plans/ — Create an investment plan
+# ──────────────────────────────────────────────
+@router.post("/plans/", response_model=InvestmentPlanResponse, status_code=status.HTTP_201_CREATED)
+def create_investment_plan(
+    payload: InvestmentPlanCreate,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Create a new investment plan template."""
+    existing = db.query(InvestmentPlan).filter(InvestmentPlan.name == payload.name).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An investment plan named '{payload.name}' already exists.",
+        )
+    plan = InvestmentPlan(
+        name=payload.name,
+        min_amount=payload.min_amount,
+        max_amount=payload.max_amount,
+        daily_roi_percent=payload.daily_roi_percent,
+        duration_days=payload.duration_days,
+        is_active=True,
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
+# ──────────────────────────────────────────────
+# GET /api/admin/plans/ — List all investment plans
+# ──────────────────────────────────────────────
+@router.get("/plans/", response_model=List[InvestmentPlanResponse])
+def list_all_plans(
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """List all investment plans (active and inactive)."""
+    return (
+        db.query(InvestmentPlan)
+        .order_by(InvestmentPlan.created_at.asc())
+        .all()
+    )
+
+
+# ──────────────────────────────────────────────
+# PATCH /api/admin/plans/{plan_id} — Update plan / toggle is_active
+# ──────────────────────────────────────────────
+@router.patch("/plans/{plan_id}", response_model=InvestmentPlanResponse)
+def update_investment_plan(
+    plan_id: str,
+    payload: InvestmentPlanUpdate,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Partially update an investment plan. Supports toggling is_active."""
+    plan = db.query(InvestmentPlan).filter(InvestmentPlan.id == plan_id).first()
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investment plan not found.")
+
+    # Check name uniqueness if name is being changed
+    if payload.name is not None and payload.name != plan.name:
+        conflict = db.query(InvestmentPlan).filter(InvestmentPlan.name == payload.name).first()
+        if conflict:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"An investment plan named '{payload.name}' already exists.",
+            )
+        plan.name = payload.name
+
+    if payload.min_amount is not None:
+        plan.min_amount = payload.min_amount
+    if payload.max_amount is not None:
+        plan.max_amount = payload.max_amount
+    if payload.daily_roi_percent is not None:
+        plan.daily_roi_percent = payload.daily_roi_percent
+    if payload.duration_days is not None:
+        plan.duration_days = payload.duration_days
+    if payload.is_active is not None:
+        plan.is_active = payload.is_active
+
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
+# ──────────────────────────────────────────────
+# POST /api/admin/investments/process-roi — ROI Staking Engine
+# ──────────────────────────────────────────────
+@router.post("/investments/process-roi", status_code=status.HTTP_200_OK)
+def process_roi(
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    ROI Staking Distribution Engine.
+
+    For every active UserInvestment:
+    1. Calculate daily_profit = amount_invested * (daily_roi_percent / 100).
+    2. Credit the user's Profit Wallet.
+    3. Increment total_earned on the investment.
+    4. If maturity_date has been reached:
+       a. Transition investment status to 'completed'.
+       b. Return the principal (amount_invested) to the user's Main Wallet.
+
+    All mutations are flushed and committed in a single transaction.
+    Returns a summary dict with counts of processed and matured investments.
+    """
+    now = datetime.now(timezone.utc)
+    active_investments = (
+        db.query(UserInvestment)
+        .filter(UserInvestment.status == "active")
+        .all()
+    )
+
+    processed_count = 0
+    matured_count = 0
+
+    for inv in active_investments:
+        # Fetch profit wallet
+        profit_wallet = (
+            db.query(Wallet)
+            .filter(Wallet.user_id == inv.user_id, Wallet.wallet_type == "profit")
+            .first()
+        )
+        if not profit_wallet:
+            # Skip if wallet is missing (shouldn't happen in normal operation)
+            continue
+
+        daily_profit = Decimal(str(inv.amount_invested)) * (
+            Decimal(str(inv.daily_roi_percent)) / Decimal("100")
+        )
+
+        # Credit daily ROI to Profit Wallet
+        profit_wallet.balance += daily_profit
+        inv.total_earned = Decimal(str(inv.total_earned)) + daily_profit
+
+        # Record ROI credit transaction
+        roi_tx = Transaction(
+            receiver_wallet_id=profit_wallet.id,
+            amount=daily_profit,
+            currency=profit_wallet.currency,
+            tx_type="roi_credit",
+            description=f"Daily ROI for investment {inv.id}",
+            status="completed",
+        )
+        db.add(roi_tx)
+        processed_count += 1
+
+        # Check maturity (make maturity_date timezone-aware for comparison)
+        maturity = inv.maturity_date
+        if maturity.tzinfo is None:
+            maturity = maturity.replace(tzinfo=timezone.utc)
+
+        if now >= maturity:
+            # Mark investment as completed
+            inv.status = "completed"
+            matured_count += 1
+
+            # Return principal to Main Wallet
+            main_wallet = (
+                db.query(Wallet)
+                .filter(Wallet.user_id == inv.user_id, Wallet.wallet_type == "main")
+                .first()
+            )
+            if main_wallet:
+                main_wallet.balance += Decimal(str(inv.amount_invested))
+                principal_tx = Transaction(
+                    receiver_wallet_id=main_wallet.id,
+                    amount=inv.amount_invested,
+                    currency=main_wallet.currency,
+                    tx_type="principal_return",
+                    description=f"Principal returned for matured investment {inv.id}",
+                    status="completed",
+                )
+                db.add(principal_tx)
+
+    db.commit()
+    return {
+        "status": "ok",
+        "processed": processed_count,
+        "matured": matured_count,
+        "timestamp": now.isoformat(),
+    }

@@ -236,25 +236,75 @@ class TransactionOut(BaseModel):
 
 
 # ──────────────────────────────────────────────
-# Investments
+# Phase 4: Investment Plans & User Investments
 # ──────────────────────────────────────────────
-class InvestmentCreateRequest(BaseModel):
-    plan_name: str
-    amount: Decimal
-    currency: str = "USD"
-    roi_percent: Decimal = Decimal("0.0")
-    duration_days: int = 30
+class InvestmentPlanCreate(BaseModel):
+    name: str
+    min_amount: Decimal
+    max_amount: Decimal
+    daily_roi_percent: Decimal
+    duration_days: int
+
+    @model_validator(mode="after")
+    def validate_amounts(self) -> "InvestmentPlanCreate":
+        if self.min_amount <= 0:
+            raise ValueError("min_amount must be positive.")
+        if self.max_amount <= self.min_amount:
+            raise ValueError("max_amount must be greater than min_amount.")
+        if self.daily_roi_percent <= 0:
+            raise ValueError("daily_roi_percent must be positive.")
+        if self.duration_days <= 0:
+            raise ValueError("duration_days must be a positive integer.")
+        return self
 
 
-class InvestmentOut(BaseModel):
+class InvestmentPlanUpdate(BaseModel):
+    """All fields optional — supports partial PATCH updates and is_active toggle."""
+    name: Optional[str] = None
+    min_amount: Optional[Decimal] = None
+    max_amount: Optional[Decimal] = None
+    daily_roi_percent: Optional[Decimal] = None
+    duration_days: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class InvestmentPlanResponse(BaseModel):
     id: uuid.UUID
-    plan_name: str
+    name: str
+    min_amount: Decimal
+    max_amount: Decimal
+    daily_roi_percent: Decimal
+    duration_days: int
+    is_active: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class InvestRequest(BaseModel):
+    """User subscribes to a plan with a specific amount."""
+    plan_id: uuid.UUID
     amount: Decimal
-    currency: str
-    roi_percent: Decimal
+
+    @field_validator("amount")
+    @classmethod
+    def positive_amount(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("amount must be positive.")
+        return v
+
+
+class UserInvestmentResponse(BaseModel):
+    id: uuid.UUID
+    plan_id: uuid.UUID
+    amount_invested: Decimal
+    daily_roi_percent: Decimal
+    duration_days: int
+    total_earned: Decimal
     status: str
-    started_at: datetime
-    matures_at: Optional[datetime]
+    start_date: datetime
+    maturity_date: datetime
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 
