@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Literal, Optional, List
-from pydantic import BaseModel, EmailStr, field_validator, model_validator
+from pydantic import BaseModel, EmailStr, Field, computed_field, field_validator, model_validator
 
 
 # ──────────────────────────────────────────────
@@ -167,14 +167,27 @@ class UserOut(BaseModel):
     country: Optional[str] = None
     phone: Optional[str] = None
     kyc_status: KYCStatus
-    kyc_document_url: Optional[str] = None
+    # The document itself can be megabytes; only admins fetch it, via a dedicated endpoint.
+    kyc_document_url: Optional[str] = Field(default=None, exclude=True)
     is_blocked: bool
     can_withdraw: bool
     can_deposit: bool
     referral_code: str
+    email_verified: bool = False
+    kyc_rejection_reason: Optional[str] = None
+    # Set only while an admin is viewing this account (view-only impersonation)
+    impersonated_by: Optional[str] = None
+    impersonation_expires_at: Optional[datetime] = None
+    referral_count: int = 0
+    total_referral_earned: Decimal = Decimal("0")
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @computed_field
+    @property
+    def has_kyc_document(self) -> bool:
+        return bool(self.kyc_document_url)
 
 
 # ──────────────────────────────────────────────
@@ -220,21 +233,35 @@ class P2PTransferRequest(BaseModel):
 
 
 class TransactionOut(BaseModel):
+    """List-safe transaction view. The proof image is only returned by detail endpoints."""
     id: uuid.UUID
     amount: Decimal
     currency: str
     tx_type: str
     description: Optional[str]
     status: str
+    direction: Optional[Literal["in", "out"]] = None   # relative to the requesting user
     gateway_name: Optional[str] = None
+    asset: Optional[str] = None
+    network: Optional[str] = None
+    fee: Optional[Decimal] = None
     tx_hash: Optional[str] = None
-    proof_image_url: Optional[str] = None
+    has_proof: bool = False
     withdrawal_address: Optional[str] = None
+    withdrawal_details: Optional[str] = None
     payout_tx_hash: Optional[str] = None
     rejection_reason: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class AdminTransactionOut(TransactionOut):
+    user_id: Optional[uuid.UUID] = None
+    user_email: Optional[str] = None
+    user_name: Optional[str] = None
+    proof_image_url: Optional[str] = None   # populated on detail requests only
 
 
 # ──────────────────────────────────────────────
@@ -242,27 +269,37 @@ class TransactionOut(BaseModel):
 # ──────────────────────────────────────────────
 class InvestmentPlanCreate(BaseModel):
     name: str
+    description: Optional[str] = None
     min_amount: Decimal
     max_amount: Decimal
     daily_roi_percent: Decimal
     duration_days: int
 
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Name is required.")
+        return v
+
     @model_validator(mode="after")
     def validate_amounts(self) -> "InvestmentPlanCreate":
         if self.min_amount <= 0:
-            raise ValueError("min_amount must be positive.")
+            raise ValueError("Minimum amount must be positive.")
         if self.max_amount <= self.min_amount:
-            raise ValueError("max_amount must be greater than min_amount.")
-        if self.daily_roi_percent <= 0:
-            raise ValueError("daily_roi_percent must be positive.")
-        if self.duration_days <= 0:
-            raise ValueError("duration_days must be a positive integer.")
+            raise ValueError("Maximum amount must be greater than the minimum.")
+        if not (Decimal("0") < self.daily_roi_percent <= Decimal("100")):
+            raise ValueError("Daily rate must be between 0 and 100 percent.")
+        if not (0 < self.duration_days <= 3650):
+            raise ValueError("Duration must be between 1 and 3650 days.")
         return self
 
 
 class InvestmentPlanUpdate(BaseModel):
     """All fields optional — supports partial PATCH updates and is_active toggle."""
     name: Optional[str] = None
+    description: Optional[str] = None
     min_amount: Optional[Decimal] = None
     max_amount: Optional[Decimal] = None
     daily_roi_percent: Optional[Decimal] = None
@@ -273,6 +310,7 @@ class InvestmentPlanUpdate(BaseModel):
 class InvestmentPlanResponse(BaseModel):
     id: uuid.UUID
     name: str
+    description: Optional[str] = None
     min_amount: Decimal
     max_amount: Decimal
     daily_roi_percent: Decimal
@@ -299,6 +337,8 @@ class InvestRequest(BaseModel):
 class UserInvestmentResponse(BaseModel):
     id: uuid.UUID
     plan_id: uuid.UUID
+    plan_name: Optional[str] = None
+    days_paid: int = 0
     amount_invested: Decimal
     daily_roi_percent: Decimal
     duration_days: int
@@ -376,8 +416,10 @@ class WalletTransferRequest(BaseModel):
 class AuditLogResponse(BaseModel):
     id: uuid.UUID
     admin_id: uuid.UUID
+    admin_email: Optional[str] = None
     action: str
     target_user_id: Optional[uuid.UUID]
+    target_email: Optional[str] = None
     details: Optional[str]
     created_at: datetime
 
@@ -419,14 +461,29 @@ class LeaderboardEntry(BaseModel):
 # Admin
 # ──────────────────────────────────────────────
 class AdminCreditRequest(BaseModel):
-    user_email: EmailStr
+    user_email: Optional[EmailStr] = None
+    user_id: Optional[uuid.UUID] = None
     wallet_type: Literal["main", "profit"]
     amount: Decimal
     description: Optional[str] = None
 
+    @field_validator("amount")
+    @classmethod
+    def positive_amount(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("Amount must be positive.")
+        return v
+
+    @model_validator(mode="after")
+    def target_required(self):
+        if not self.user_email and not self.user_id:
+            raise ValueError("Provide user_id or user_email.")
+        return self
+
 
 class AdminDebitRequest(BaseModel):
-    user_email: EmailStr
+    user_email: Optional[EmailStr] = None
+    user_id: Optional[uuid.UUID] = None
     wallet_type: Literal["main", "profit"]
     amount: Decimal
     description: Optional[str] = None
@@ -455,15 +512,21 @@ class AdminKYCReviewRequest(BaseModel):
 # Phase 2: KYC & Manual Deposit Schemas
 # ──────────────────────────────────────────────
 class KYCSubmitRequest(BaseModel):
-    kyc_document_url: str
+    kyc_document_url: str   # data URL (image or PDF), validated server-side
 
 
 class DepositCreateRequest(BaseModel):
+    """Amount is the USD value the user sent. Crypto is only the payment rail."""
+    payment_method_id: uuid.UUID
     amount: Decimal
-    currency: str
-    gateway_name: str
-    tx_hash: str
+    tx_hash: Optional[str] = None
     proof_image_url: Optional[str] = None
+
+    @model_validator(mode="after")
+    def evidence_required(self):
+        if not (self.tx_hash and self.tx_hash.strip()) and not self.proof_image_url:
+            raise ValueError("Add the transaction hash or a screenshot of the payment.")
+        return self
 
     @field_validator("amount")
     @classmethod
@@ -482,10 +545,18 @@ class AdminDepositReviewRequest(BaseModel):
 # Phase 3: Manual Withdrawal Schemas
 # ──────────────────────────────────────────────
 class WithdrawalCreateRequest(BaseModel):
-    amount: Decimal
-    currency: str
-    gateway_name: str
+    payment_method_id: uuid.UUID
+    amount: Decimal                          # USD amount debited from the Main wallet
     withdrawal_address: str
+    withdrawal_details: Optional[str] = None  # memo/tag or notes for the admin
+
+    @field_validator("withdrawal_address")
+    @classmethod
+    def address_shape(cls, v: str) -> str:
+        v = v.strip()
+        if not (10 <= len(v) <= 128) or any(c.isspace() for c in v):
+            raise ValueError("Enter a valid wallet address.")
+        return v
 
     @field_validator("amount")
     @classmethod
@@ -499,3 +570,113 @@ class AdminWithdrawalReviewRequest(BaseModel):
     status: Literal["approved", "completed", "rejected"]
     payout_tx_hash: Optional[str] = None
     rejection_reason: Optional[str] = None
+
+
+# ──────────────────────────────────────────────
+# Payment methods
+# ──────────────────────────────────────────────
+class PaymentMethodBase(BaseModel):
+    asset: str
+    network: str
+    deposit_address: Optional[str] = None
+    deposit_memo: Optional[str] = None
+    deposit_enabled: bool = True
+    withdraw_enabled: bool = True
+    min_deposit: Decimal = Decimal("0")
+    min_withdrawal: Decimal = Decimal("0")
+    withdrawal_fee: Decimal = Decimal("0")
+    is_active: bool = True
+
+    @field_validator("asset", "network")
+    @classmethod
+    def strip_required(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Required.")
+        return v
+
+    @field_validator("min_deposit", "min_withdrawal", "withdrawal_fee")
+    @classmethod
+    def non_negative(cls, v: Decimal) -> Decimal:
+        if v < 0:
+            raise ValueError("Must be zero or more.")
+        return v
+
+    @model_validator(mode="after")
+    def deposit_needs_address(self):
+        if self.deposit_enabled and not (self.deposit_address and self.deposit_address.strip()):
+            raise ValueError("A deposit address is required when deposits are enabled.")
+        return self
+
+
+class PaymentMethodCreate(PaymentMethodBase):
+    pass
+
+
+class PaymentMethodUpdate(BaseModel):
+    asset: Optional[str] = None
+    network: Optional[str] = None
+    deposit_address: Optional[str] = None
+    deposit_memo: Optional[str] = None
+    deposit_enabled: Optional[bool] = None
+    withdraw_enabled: Optional[bool] = None
+    min_deposit: Optional[Decimal] = None
+    min_withdrawal: Optional[Decimal] = None
+    withdrawal_fee: Optional[Decimal] = None
+    is_active: Optional[bool] = None
+
+
+class PaymentMethodOut(PaymentMethodBase):
+    id: uuid.UUID
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+    @model_validator(mode="after")
+    def deposit_needs_address(self):  # outputs are not re-validated
+        return self
+
+
+# ──────────────────────────────────────────────
+# Admin overview / users
+# ──────────────────────────────────────────────
+class AdminStats(BaseModel):
+    users_total: int
+    users_new_7d: int
+    users_blocked: int
+    pending_deposits: int
+    pending_deposits_amount: Decimal
+    pending_withdrawals: int
+    pending_withdrawals_amount: Decimal
+    pending_kyc: int
+    total_main_balance: Decimal
+    total_profit_balance: Decimal
+    active_investments: int
+    active_investment_capital: Decimal
+    deposits_completed_30d: Decimal
+    withdrawals_completed_30d: Decimal
+
+
+class UserPage(BaseModel):
+    total: int
+    items: List[UserOut]
+
+
+class AdminUserDetail(BaseModel):
+    user: UserOut
+    wallets: List[WalletOut]
+    investments: List[UserInvestmentResponse]
+    transactions: List[TransactionOut]
+    referred_by_email: Optional[str] = None
+
+
+class EmailVerifyRequest(BaseModel):
+    token: str
+
+
+class RoleUpdate(BaseModel):
+    is_admin: bool
+
+
+class UnreadCount(BaseModel):
+    unread: int

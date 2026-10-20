@@ -5,3 +5,11 @@ __pycache__/
 backend/create_admin_user.py
 backend/credit_user_wallet.py
 backend/test_*.py
+frontend/node_modules/
+frontend/.next/
+frontend/.vercel/
+frontend/.env
+frontend/.env.local
+frontend/.env.production
+frontend/.env.development
+frontend/.env.test

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 app/routers/admin_emails.py — Admin email broadcast and targeted messaging
 """
@@ -11,7 +12,8 @@ from app.models import User, BroadcastLog, UserInvestment, KYCStatus
 from app.schemas import AdminSendUserEmailRequest, AdminBroadcastEmailRequest, BroadcastLogResponse
 from app.security import get_current_admin
 from app.services.notification_service import send_notification_and_email
-from app.services.email import resend, settings, logger as email_logger
+from app.services.email_templates import render_email
+from app.database import SessionLocal
 
 logger = logging.getLogger("zenfort.admin_emails")
 
@@ -37,7 +39,9 @@ def _send_email_to_user(
             message=body,
             notification_type="general",
             email_subject=subject,
-            email_html=body,
+            # Admin text is rendered as escaped paragraphs, never as raw HTML.
+            email_html=render_email(subject, user.full_name,
+                                    [p.strip() for p in body.split("\n\n") if p.strip()]),
         )
         logger.info("Email sent to %s: %s", user.email, subject)
     except Exception as e:
@@ -45,7 +49,7 @@ def _send_email_to_user(
 
 
 def _broadcast_emails_task(
-    db: Session,
+    _request_db: Session,
     admin_id: str,
     subject: str,
     body: str,
@@ -56,6 +60,9 @@ def _broadcast_emails_task(
     Background task to broadcast emails to filtered users.
     Updates recipient_count on the BroadcastLog after completion.
     """
+    # The request's session is closed by the time a background task runs,
+    # so the task owns a fresh one.
+    db = SessionLocal()
     try:
         # Build query based on target_filter
         query = db.query(User).filter(User.is_admin == False)
@@ -94,6 +101,8 @@ def _broadcast_emails_task(
 
     except Exception as e:
         logger.error("Broadcast task failed: %s", e, exc_info=True)
+    finally:
+        db.close()
 
 
 # ──────────────────────────────────────────────

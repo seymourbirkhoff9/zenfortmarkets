@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 app/utils/country_currency.py
 Offline, zero-network country → ISO 4217 currency resolution using pycountry.

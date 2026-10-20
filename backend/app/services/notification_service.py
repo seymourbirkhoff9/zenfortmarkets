@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 app/services/notification_service.py — Notification & Email Service
 
@@ -5,11 +6,31 @@ Creates in-app notifications and sends transactional emails via Resend.
 Email failures are logged but never crash the primary transaction.
 """
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy.orm import Session
 from app.models import User, Notification
 from app.services.email import resend, settings, logger as email_logger
 
 logger = logging.getLogger("zenfort.notification")
+
+# Email delivery runs off the request thread so a slow or failing provider never
+# delays (or breaks) the API response.
+_email_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="email")
+
+
+def _deliver(to: str, subject: str, html: str) -> None:
+    try:
+        resend.Emails.send({"from": settings.EMAIL_FROM, "to": [to], "subject": subject, "html": html})
+        logger.info("Email sent → %s: %s", to, subject)
+    except Exception as e:  # never propagate
+        logger.error("Failed to send email to %s: %s", to, e, exc_info=True)
+
+
+def queue_email(to: str, subject: str, html: str) -> None:
+    if not _api_key_present():
+        logger.info("[Mock Email] to=%s subject='%s'", to, subject)
+        return
+    _email_pool.submit(_deliver, to, subject, html)
 
 
 def _api_key_present() -> bool:
@@ -58,26 +79,6 @@ def send_notification_and_email(
     db.commit()
     db.refresh(notification)
 
-    # 2. Send email (non-blocking - failures logged only)
-    if not _api_key_present():
-        logger.info(
-            "[Mock Email] %s → to=%s  subject='%s'",
-            notification_type,
-            user.email,
-            email_subject,
-        )
-        return notification
-
-    try:
-        resend.Emails.send({
-            "from": settings.EMAIL_FROM,
-            "to": [user.email],
-            "subject": email_subject,
-            "html": email_html,
-        })
-        logger.info("Email sent → %s: %s", user.email, email_subject)
-    except Exception as e:
-        # Email failure should NOT crash the main transaction
-        logger.error("Failed to send email to %s: %s", user.email, e, exc_info=True)
-
+    # 2. Send email in the background (failures are logged only)
+    queue_email(user.email, email_subject, email_html)
     return notification

@@ -1,105 +1,66 @@
 """
-app/services/referral_service.py — Referral bonus and milestone reward logic
+app/services/referral_service.py — one-time bonus to a referrer.
+
+The bonus is paid once per referred user, on their first qualifying event
+(first approved deposit or first investment, whichever comes first).
+Idempotency is enforced by a tag stored on the ledger row.
 """
+import logging
 from decimal import Decimal
+
 from sqlalchemy.orm import Session
 
-from app.models import User, Wallet, Transaction
+from app.config import settings
+from app.models import Transaction, User
+from app.services.email_templates import render_email, usd
+from app.services.ledger import credit, lock_wallet, money
 from app.services.notification_service import send_notification_and_email
 
 
-REFERRAL_BONUS_AMOUNT = Decimal("10.00")  # Configurable bonus amount
+logger = logging.getLogger("zenfort.referrals")
 
 
-def process_referral_milestone(
-    db: Session,
-    user: User,
-    milestone_type: str,  # "first_deposit" or "first_investment"
-    amount: Decimal = None,
-):
+def _tag(user: User) -> str:
+    return f"[ref:{user.id}]"
+
+
+def process_referral_milestone(db: Session, user: User, milestone_type: str, amount: Decimal | None = None):
     """
-    Process referral milestone rewards.
-    
-    When a referred user completes their first deposit or investment,
-    pay a bonus to the referrer's Main Wallet.
-    
-    Args:
-        db: Database session
-        user: The referred user who triggered the milestone
-        milestone_type: Type of milestone ("first_deposit" or "first_investment")
-        amount: Amount of deposit or investment (for notification details)
+    Best-effort side effect. It runs after the deposit/investment has already
+    committed, so it must never raise: a failure here would make the API report
+    an error for an action that actually succeeded.
     """
-    # Check if user was referred
-    if not user.referred_by_id:
+    try:
+        _pay_bonus(db, user, milestone_type)
+    except Exception:
+        db.rollback()
+        logger.exception("Referral bonus failed for user %s (%s)", getattr(user, "id", None), milestone_type)
+
+
+def _pay_bonus(db: Session, user: User, milestone_type: str) -> None:
+    if not user or not user.referred_by_id:
         return
-    
-    referrer = db.query(User).filter(User.id == user.referred_by_id).first()
-    if not referrer:
+    referrer = db.query(User).filter(User.id == user.referred_by_id, User.is_active.is_(True)).first()
+    if not referrer or referrer.is_admin:     # staff codes don't earn bonuses (and have no wallets)
         return
-    
-    # Check if this is the first milestone of this type for this user
-    # We'll track this by checking if the referrer has already received a bonus for this user
-    # For simplicity, we'll check if the referrer has any referral_bonus transactions for this user
-    existing_bonus = (
-        db.query(Transaction)
-        .filter(
-            Transaction.tx_type == "referral_bonus",
-            Transaction.description.like(f"%{user.email}%")
-        )
-        .first()
-    )
-    
-    if existing_bonus:
-        return  # Already paid bonus for this user
-    
-    # Get referrer's main wallet
-    main_wallet = (
-        db.query(Wallet)
-        .filter(Wallet.user_id == referrer.id, Wallet.wallet_type == "main")
-        .first()
-    )
-    
-    if not main_wallet:
+    if db.query(Transaction.id).filter(Transaction.tx_type == "referral_bonus",
+                                      Transaction.description.contains(_tag(user))).first():
         return
-    
-    # Credit the bonus
-    main_wallet.balance += REFERRAL_BONUS_AMOUNT
-    referrer.total_referral_earned += REFERRAL_BONUS_AMOUNT
-    
-    # Create transaction record
-    tx = Transaction(
-        receiver_wallet_id=main_wallet.id,
-        amount=REFERRAL_BONUS_AMOUNT,
-        currency=main_wallet.currency,
-        tx_type="referral_bonus",
-        description=f"Referral bonus for {user.full_name} ({user.email}) - {milestone_type}",
-        status="completed",
-    )
-    db.add(tx)
-    
+
+    bonus = money(settings.REFERRAL_BONUS_AMOUNT)
+    wallet = lock_wallet(db, referrer.id, "main")
+    credit(wallet, bonus)
+    referrer.total_referral_earned = Decimal(referrer.total_referral_earned or 0) + bonus
+    event = "first deposit" if milestone_type == "first_deposit" else "first investment"
+    db.add(Transaction(receiver_wallet_id=wallet.id, amount=bonus, currency=settings.BASE_CURRENCY,
+                       tx_type="referral_bonus", status="completed",
+                       description=f"Referral bonus: {user.full_name}'s {event} {_tag(user)}"))
     db.commit()
-    db.refresh(referrer)
-    
-    # Send notification and email to referrer
-    milestone_text = "first deposit" if milestone_type == "first_deposit" else "first investment"
-    amount_text = f"${amount}" if amount else ""
-    
+
+    msg = f"You earned {usd(bonus)} because {user.full_name} made their {event}."
     send_notification_and_email(
-        db=db,
-        user=referrer,
-        title="Referral Bonus Earned!",
-        message=f"Congratulations! You earned ${REFERRAL_BONUS_AMOUNT} as a referral bonus for {user.full_name}'s {milestone_text} {amount_text}.",
-        notification_type="referral",
-        email_subject=f"Referral Bonus Earned - ${REFERRAL_BONUS_AMOUNT}",
-        email_html=f"""
-        <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
-          <h2 style="color:#1a1a3e;">Referral Bonus Earned!</h2>
-          <p>Hi {referrer.full_name},</p>
-          <p>Congratulations! You've earned a referral bonus of <strong>${REFERRAL_BONUS_AMOUNT}</strong>.</p>
-          <p>Your referral {user.full_name} just完成 their {milestone_text} {amount_text}.</p>
-          <p>The bonus has been credited to your Main Wallet.</p>
-          <hr/>
-          <small style="color:#888;">Zenfort Markets</small>
-        </div>
-        """,
+        db=db, user=referrer, title="Referral bonus earned", message=msg, notification_type="referral",
+        email_subject="Referral bonus earned — Zenfort Markets",
+        email_html=render_email("Referral bonus earned", referrer.full_name,
+                                [msg, "It's already in your Main wallet."]),
     )
