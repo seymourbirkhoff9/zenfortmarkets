@@ -71,7 +71,8 @@ def test_deposit_review_flow_alerts_admin_and_is_single_use(client, admin, make_
     queue = client.get("/api/admin/deposits/pending", headers=admin).json()
     item = next(d for d in queue if d["id"] == dep["id"])
     assert item["user_email"] == u["email"] and item["proof_image_url"] is None   # list stays light
-    assert client.get(f"/api/admin/transactions/{dep['id']}", headers=admin).json()["proof_image_url"] == PNG
+    proof_url = client.get(f"/api/admin/transactions/{dep['id']}", headers=admin).json()["proof_image_url"]
+    assert proof_url.startswith("/api/files/signed/") and client.get(proof_url).content.startswith(b"\x89PNG")
 
     ok = client.patch(f"/api/admin/deposits/{dep['id']}/review", headers=admin, json={"status": "approved"})
     assert ok.status_code == 200 and ok.json()["status"] == "completed"
@@ -166,9 +167,9 @@ def test_roi_accrual_is_idempotent_and_matures(client, admin, make_user):
         "daily_roi_percent": "1.5", "duration_days": 5}).json()
     u = make_user()
     credit(client, admin, u["id"], 200)
-    out_of_range = client.post("/api/investments/", headers=u["h"], json={"plan_id": plan["id"], "amount": "10"})
+    out_of_range = client.post("/api/investments/", headers=u["h"], json={"plan_id": plan["id"], "amount": "10", "accept_risk": True})
     assert out_of_range.status_code == 422
-    inv = client.post("/api/investments/", headers=u["h"], json={"plan_id": plan["id"], "amount": "100"}).json()
+    inv = client.post("/api/investments/", headers=u["h"], json={"plan_id": plan["id"], "amount": "100", "accept_risk": True}).json()
     assert bal(client, u["h"]) == Decimal("100")
 
     db = SessionLocal()                                  # pretend it started 3 days ago
@@ -354,3 +355,106 @@ def test_legacy_withdrawal_without_wallet_gives_clear_409(client, admin):
     r = client.patch(f"/api/admin/withdrawals/{tx_id}/review", headers=admin,
                      json={"status": "rejected", "rejection_reason": "x"})
     assert r.status_code == 409 and "legacy" in r.json()["detail"]
+
+
+# ── Batch 3: consent, profile photos, private file storage ──
+import httpx as _httpx
+from app.services import storage as _storage
+from app.services.storage import SupabaseStorage as _Supa
+
+
+def test_signup_requires_terms_and_records_version(client):
+    body = {"full_name": "No Consent", "email": f"nc-{_uuid.uuid4().hex[:6]}@test.dev", "password": "User-pass-1",
+            "confirm_password": "User-pass-1", "country": "Nigeria"}
+    r = client.post("/api/auth/signup", json=body)
+    assert r.status_code == 422 and "Terms" in r.text
+    ok = client.post("/api/auth/signup", json={**body, "accept_terms": True})
+    assert ok.status_code == 201 and ok.json()["terms_current"] is True and ok.json()["terms_accepted_at"]
+
+
+def test_existing_user_can_accept_new_terms(client, make_user):
+    u = make_user()
+    db = SessionLocal(); usr = db.get(_User, _uuid.UUID(u["id"])); usr.terms_version = "2020-01"; db.commit(); db.close()
+    assert client.get("/api/auth/me", headers=u["h"]).json()["terms_current"] is False
+    r = client.post("/api/auth/accept-terms", headers=u["h"])
+    assert r.json()["terms_current"] is True
+
+
+def test_investing_requires_risk_acknowledgement(client, admin, make_user):
+    plan = client.post("/api/admin/plans/", headers=admin, json={"name": f"Risk {_uuid.uuid4().hex[:5]}", "min_amount": "10",
+                       "max_amount": "100", "daily_roi_percent": "1", "duration_days": 5}).json()
+    u = make_user(); credit(client, admin, u["id"], 50)
+    r = client.post("/api/investments/", headers=u["h"], json={"plan_id": plan["id"], "amount": "20"})
+    assert r.status_code == 422 and "Risk Disclosure" in r.text
+
+
+def test_profile_photo_upload_replace_remove(client, make_user):
+    u = make_user()
+    r = client.post("/api/auth/avatar", headers=u["h"], json={"image": PNG})
+    url1 = r.json()["avatar_url"]
+    assert r.status_code == 200 and url1.startswith("/api/files/public/avatars/")
+    img = client.get(url1)
+    assert img.status_code == 200 and img.headers["content-type"] == "image/png"
+    url2 = client.post("/api/auth/avatar", headers=u["h"], json={"image": PNG}).json()["avatar_url"]
+    assert url2 != url1 and client.get(url1).status_code == 404          # old photo deleted
+    assert client.delete("/api/auth/avatar", headers=u["h"]).json()["avatar_url"] is None
+    assert client.get(url2).status_code == 404
+    bad = client.post("/api/auth/avatar", headers=u["h"], json={"image": "data:application/pdf;base64,JVBERi0="})
+    assert bad.status_code == 422
+
+
+def test_private_files_need_signed_links(client, admin, make_user, method):
+    u = make_user()
+    client.post("/api/auth/kyc/submit", headers=u["h"], json={"kyc_document_url": PNG})
+    db = SessionLocal(); ref = db.get(_User, _uuid.UUID(u["id"])).kyc_document_url; db.close()
+    assert ref.startswith("local://private-docs/kyc/") and "base64" not in ref        # bytes no longer in the DB
+
+    doc = client.get(f"/api/admin/kyc/{u['id']}/document", headers=admin).json()
+    assert doc["content_type"] == "image/png" and doc["document"].startswith("/api/files/signed/")
+    assert client.get(doc["document"]).status_code == 200
+    assert client.get(doc["document"][:-3] + "abc").status_code == 403               # tampered link refused
+    assert client.get(f"/api/admin/kyc/{u['id']}/document", headers=u["h"]).status_code == 403
+    path = ref.split("://", 1)[1].split("/", 1)[1]
+    assert client.get(f"/api/files/public/private-docs/{path}").status_code == 404   # not reachable publicly
+
+    dep = client.post("/api/wallets/deposits/", headers=u["h"], json={"payment_method_id": method["id"], "amount": "30",
+                      "tx_hash": "0xstore", "proof_image_url": PNG}).json()
+    assert dep["has_proof"] is True
+    detail = client.get(f"/api/admin/transactions/{dep['id']}", headers=admin).json()
+    assert detail["proof_image_url"].startswith("/api/files/signed/") and client.get(detail["proof_image_url"]).status_code == 200
+    own = client.get(f"/api/wallets/transactions/{dep['id']}", headers=u["h"]).json()
+    assert own["proof_image_url"].startswith("/api/files/signed/")
+
+
+def test_legacy_data_url_rows_still_readable(client, admin, make_user):
+    u = make_user()
+    db = SessionLocal(); usr = db.get(_User, _uuid.UUID(u["id"])); usr.kyc_document_url = PNG; usr.kyc_status = "PENDING"
+    db.commit(); db.close()
+    doc = client.get(f"/api/admin/kyc/{u['id']}/document", headers=admin).json()
+    assert doc["document"] == PNG and doc["content_type"] == "image/png"
+
+
+def test_supabase_backend_speaks_the_storage_api():
+    calls = []
+
+    def handler(req: _httpx.Request):
+        calls.append((req.method, req.url.path, dict(req.headers)))
+        if "/object/sign/" in req.url.path:
+            return _httpx.Response(200, json={"signedURL": "/object/sign/private-docs/kyc/a.png?token=T"})
+        return _httpx.Response(200, json={"Key": "ok"})
+
+    s = _Supa("https://proj.supabase.co", "service-key", client=_httpx.Client(transport=_httpx.MockTransport(handler)))
+    s.put("private-docs", "kyc/a.png", b"x", "image/png")
+    method_, path_, headers_ = calls[-1]
+    assert (method_, path_) == ("POST", "/storage/v1/object/private-docs/kyc/a.png")
+    assert headers_["authorization"] == "Bearer service-key" and headers_["apikey"] == "service-key"
+    assert headers_["content-type"] == "image/png" and headers_["x-upsert"] == "true"
+    assert s.signed_url("private-docs", "kyc/a.png", 60) == \
+        "https://proj.supabase.co/storage/v1/object/sign/private-docs/kyc/a.png?token=T"
+    assert s.public_url("avatars", "u/p.jpg") == "https://proj.supabase.co/storage/v1/object/public/avatars/u/p.jpg"
+    s.delete("avatars", "u/p.jpg")
+    assert calls[-1][:2] == ("DELETE", "/storage/v1/object/avatars")
+
+    absolute = _Supa("https://proj.supabase.co", "k", client=_httpx.Client(transport=_httpx.MockTransport(
+        lambda r: _httpx.Response(200, json={"signedURL": "https://proj.supabase.co/storage/v1/object/sign/b/p?token=Z"}))))
+    assert absolute.signed_url("b", "p", 60) == "https://proj.supabase.co/storage/v1/object/sign/b/p?token=Z"

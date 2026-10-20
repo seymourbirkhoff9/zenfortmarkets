@@ -98,6 +98,9 @@ export const api = {
     submitKyc: (dataUrl) => post('/auth/kyc/submit', { kyc_document_url: dataUrl }),
     closeAccount: () => del('/auth/account'),
     exitImpersonation: () => post('/auth/impersonation/exit'),
+    acceptTerms: () => post('/auth/accept-terms'),
+    uploadAvatar: (image) => post('/auth/avatar', { image }),
+    removeAvatar: () => del('/auth/avatar'),
   },
   wallets: {
     list: () => get('/wallets/'),
@@ -112,7 +115,7 @@ export const api = {
   investments: {
     plans: () => get('/investments/plans'),
     mine: () => get('/investments/my-investments'),
-    create: (plan_id, amount) => post('/investments/', { plan_id, amount }),
+    create: (plan_id, amount) => post('/investments/', { plan_id, amount, accept_risk: true }),
   },
   notifications: {
     list: () => get('/notifications/'),

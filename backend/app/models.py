@@ -1,4 +1,3 @@
-from __future__ import annotations
 """
 app/models.py — SQLAlchemy ORM models for Zenfort Markets
 """
@@ -41,6 +40,9 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     is_verified = Column(Boolean, default=False)       # KYC-verified (set by KYC approval)
     email_verified = Column(Boolean, default=False, nullable=False)
+    avatar_url = Column(Text, nullable=True)            # storage reference, e.g. sb://avatars/<user>/<file>.jpg
+    terms_version = Column(String(20), nullable=True)   # version of Terms/Privacy the user accepted
+    terms_accepted_at = Column(DateTime(timezone=True), nullable=True)
     country = Column(String(100), nullable=True)
     phone = Column(String(50), nullable=True)
     # Compliance & Governance fields

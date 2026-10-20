@@ -8,6 +8,36 @@ import { viewOnly } from './actions.js';
 
 const totalReturn = (amount, plan) => amount * (Number(plan.daily_roi_percent) / 100) * plan.duration_days;
 
+/** A round example amount inside the plan's range, for the worked example on each card. */
+function exampleAmount(plan) {
+  const min = Number(plan.min_amount), max = Number(plan.max_amount);
+  const nice = [100, 250, 500, 1000, 2500, 5000, 10000].find((n) => n >= min && n <= max);
+  return nice ?? min;
+}
+
+const planCard = (p) => {
+  const ex = exampleAmount(p);
+  const termPct = Number(p.daily_roi_percent) * p.duration_days;
+  return html`
+  <li class="panel flex flex-col p-6">
+    <h3 class="font-serif text-2xl">${p.name}</h3>
+    ${p.description ? html`<p class="mt-1 text-sm text-muted">${p.description}</p>` : ''}
+    <p class="mt-5 flex items-baseline gap-2"><span class="figure text-5xl">${pct(p.daily_roi_percent)}</span>
+      <span class="text-sm text-muted">per day</span></p>
+    <span class="mt-3 block h-0.5 w-12 bg-brass" aria-hidden="true"></span>
+    <dl class="mt-4 grid grid-cols-3 gap-3 text-sm">
+      <div><dt class="text-xs text-muted">Term</dt><dd class="figure text-base">${p.duration_days} days</dd></div>
+      <div><dt class="text-xs text-muted">From</dt><dd class="figure text-base">${money(p.min_amount)}</dd></div>
+      <div><dt class="text-xs text-muted">Up to</dt><dd class="figure text-base">${money(p.max_amount)}</dd></div>
+    </dl>
+    <p class="mt-5 rounded border border-line bg-sunken p-3 text-sm">
+      <span class="block text-xs font-semibold text-muted">Example</span>
+      ${money(ex)} earns <strong class="figure">${money(totalReturn(ex, p))}</strong> over ${p.duration_days} days
+      (${termPct.toLocaleString('en-US', { maximumFractionDigits: 2 })}% in total), then the ${money(ex)} comes back to Main.</p>
+    <div class="mt-auto pt-6"><button class="btn-primary w-full py-2.5" data-invest="${p.id}" ${session.user.is_blocked ? 'disabled' : ''}>Invest in ${p.name}</button></div>
+  </li>`;
+};
+
 export default async function invest(outlet) {
   let state;
   async function load() {
@@ -23,18 +53,13 @@ export default async function invest(outlet) {
     const { plans, mine, main } = state;
     render(outlet, html`
       ${pageHeader('Invest', 'Plans are set by the operator. Returns are paid daily into your Profit wallet and your principal comes back to Main at the end of the term. In this demo, returns are simulated.')}
-      <section class="panel" aria-labelledby="plans-h">
-        <div class="panel-head"><h2 id="plans-h" class="panel-title">Available plans</h2>
-          <p class="text-sm text-muted">Main wallet <span class="figure ml-1 text-ink">${money(main)}</span></p></div>
-        ${plans.length ? html`<ul class="divide-y divide-line">${plans.map((p) => html`
-          <li class="grid items-center gap-4 px-5 py-5 md:grid-cols-[1.6fr_repeat(3,1fr)_auto]">
-            <div><p class="font-serif text-xl">${p.name}</p>${p.description ? html`<p class="mt-1 max-w-prose text-sm text-muted">${p.description}</p>` : ''}</div>
-            <div><p class="text-xs text-muted">Daily rate</p><p class="figure text-lg">${pct(p.daily_roi_percent)}</p></div>
-            <div><p class="text-xs text-muted">Term</p><p class="figure text-lg">${p.duration_days} days</p></div>
-            <div><p class="text-xs text-muted">Amount</p><p class="figure">${money(p.min_amount)} – ${money(p.max_amount)}</p></div>
-            <button class="btn-primary" data-invest="${p.id}" ${session.user.is_blocked ? 'disabled' : ''}>Invest</button>
-          </li>`)}</ul>`
-          : emptyState('No plans are open', 'The operator hasn’t published any plans yet.')}
+      <section aria-labelledby="plans-h">
+        <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 id="plans-h" class="panel-title">Available plans</h2>
+          <p class="text-sm text-muted">Main wallet <span class="figure ml-1 text-ink">${money(main)}</span></p>
+        </div>
+        ${plans.length ? html`<ul class="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">${plans.map(planCard)}</ul>`
+          : html`<div class="panel">${emptyState('No plans are open', 'The operator hasn’t published any plans yet.')}</div>`}
       </section>
 
       <section class="panel mt-6" aria-labelledby="mine-h">
@@ -62,7 +87,7 @@ export default async function invest(outlet) {
     try {
       const done = await openDialog({
         title: `Invest in ${plan.name}`,
-        submitLabel: 'Confirm investment',
+        submitLabel: 'Confirm investment', wide: false,
         body: html`
           <p class="text-sm text-muted">${pct(plan.daily_roi_percent)} per day for ${plan.duration_days} days. Available in Main: <strong class="figure text-ink">${money(state.main)}</strong></p>
           <div class="field"><label class="label" for="inv-amount">Amount, in US dollars</label>
@@ -73,7 +98,10 @@ export default async function invest(outlet) {
             <div><dt class="text-muted">Paid to Profit over the term</dt><dd class="figure text-lg">—</dd></div>
             <div><dt class="text-muted">Principal back to Main on</dt><dd class="figure text-lg">${date(Date.now() + plan.duration_days * 864e5)}</dd></div>
           </dl>
-          <p class="hint">The amount is locked for the full term and can’t be withdrawn early.</p>`,
+          <p class="hint">The amount is locked for the full term and can’t be withdrawn early.</p>
+          <label class="flex items-start gap-2 text-sm"><input type="checkbox" name="accept_risk" required class="mt-1 h-4 w-4 accent-settled" />
+            <span>I’ve read the <a class="btn-link" href="/risk.html" target="_blank" rel="noopener">Risk Disclosure</a>.
+              I understand returns aren’t guaranteed and I could lose money.</span></label>`,
         onMount: (dlg) => $('#inv-amount', dlg).addEventListener('input', (e) => {
           const v = Number(e.target.value || 0);
           $('#inv-preview dd', dlg).textContent = v ? money(totalReturn(v, plan)) : '—';

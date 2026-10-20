@@ -45,5 +45,17 @@ class Settings(BaseSettings):
     # subdomains count as different sites). Empty = API only (local dev uses the Vite server).
     FRONTEND_DIST: str = ""
 
+    # File storage. With SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY set, files go to Supabase Storage;
+    # otherwise they're kept in LOCAL_UPLOAD_DIR (development / tests). The service key is server-only.
+    SUPABASE_URL: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
+    STORAGE_PUBLIC_BUCKET: str = "avatars"          # public: profile photos
+    STORAGE_PRIVATE_BUCKET: str = "private-docs"    # private: ID documents, payment screenshots
+    LOCAL_UPLOAD_DIR: str = "uploads"
+    SIGNED_URL_SECONDS: int = 300
+
+    # Bump when Terms/Privacy change; users are asked to accept the new version on their next visit.
+    TERMS_VERSION: str = "2026-10"
+
 
 settings = Settings()

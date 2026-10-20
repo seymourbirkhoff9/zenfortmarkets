@@ -1,7 +1,8 @@
 import { api } from '../../lib/api.js';
 import { $, html, on, render } from '../../lib/dom.js';
 import { date } from '../../lib/format.js';
-import { confirmDialog, filePicker, setBusy, toast, toastError } from '../../lib/ui.js';
+import { confirmDialog, filePicker, fileToSquareDataUrl, setBusy, toast, toastError } from '../../lib/ui.js';
+import { avatar } from '../../lib/avatar.js';
 import { refreshUser, session } from '../../session.js';
 import { pageHeader } from '../common.js';
 import { passwordToggles } from '../../lib/password.js';
@@ -27,6 +28,18 @@ export default async function settings(outlet) {
     ${pageHeader('Settings', ro ? 'View only: you’re viewing this account as an admin.' : '')}
     <fieldset class="grid gap-5" ${ro ? 'disabled' : ''}>
       ${section('profile-h', 'Profile', 'Your name appears on transfers you send.', html`
+        <div class="mb-6 flex items-center gap-4">
+          <span id="photo-preview">${avatar(u, 'lg')}</span>
+          <div class="grid gap-2">
+            <div class="flex flex-wrap gap-2">
+              <label class="btn-quiet btn-sm cursor-pointer">
+                <input id="photo-input" type="file" accept="image/png,image/jpeg,image/webp" class="sr-only" />
+                <span id="photo-label">${u.avatar_url ? 'Change photo' : 'Add a photo'}</span></label>
+              <button type="button" class="btn-quiet btn-sm" data-action="remove-photo" ${u.avatar_url ? '' : 'hidden'}>Remove</button>
+            </div>
+            <p class="hint">Square images look best. We crop and resize it for you.</p>
+          </div>
+        </div>
         <form id="profile" class="grid max-w-md gap-4">
           <div class="field"><label class="label" for="s-name">Full name</label><input class="input" id="s-name" name="full_name" value="${u.full_name}" required /></div>
           <div class="field"><label class="label" for="s-phone">Phone</label><input class="input" id="s-phone" name="phone" type="tel" value="${u.phone || ''}" /></div>
@@ -93,6 +106,27 @@ export default async function settings(outlet) {
       await api.auth.changePassword({ current_password: e.target.current_password.value, new_password: e.target.new_password.value });
       e.target.reset(); toast('Password changed.');
     } catch (err) { toastError(err); } finally { setBusy(btn, false); }
+  });
+
+  // ── Profile photo ──
+  const showPhoto = (user) => {
+    session.user = user;
+    render(outlet.querySelector('#photo-preview'), avatar(user, 'lg'));
+    outlet.querySelector('#photo-label').textContent = user.avatar_url ? 'Change photo' : 'Add a photo';
+    outlet.querySelector('[data-action="remove-photo"]').hidden = !user.avatar_url;
+    window.dispatchEvent(new CustomEvent('zf:user-updated', { detail: user }));
+  };
+  on(outlet, 'change', '#photo-input', async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const label = outlet.querySelector('#photo-label');
+    label.textContent = 'Uploading…';
+    try { showPhoto(await api.auth.uploadAvatar(await fileToSquareDataUrl(file))); toast('Photo updated.'); }
+    catch (err) { toastError(err); label.textContent = session.user.avatar_url ? 'Change photo' : 'Add a photo'; }
+  });
+  on(outlet, 'click', '[data-action="remove-photo"]', async () => {
+    try { showPhoto(await api.auth.removeAvatar()); toast('Photo removed.'); } catch (err) { toastError(err); }
   });
 
   on(outlet, 'click', '[data-action="resend"]', async () => {

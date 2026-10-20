@@ -1,4 +1,3 @@
-from __future__ import annotations
 """
 app/services/serializers.py — turn Transaction rows into API payloads.
 
@@ -8,6 +7,7 @@ Kept in one place so user and admin endpoints agree on shape, and so the
 from typing import Iterable, Optional
 
 from app.models import Transaction, User
+from app.services.storage import url_for
 
 
 def tx_view(tx: Transaction, own_wallet_ids: Optional[Iterable] = None) -> dict:
@@ -49,6 +49,6 @@ def admin_tx_view(tx: Transaction, user: Optional[User], include_proof: bool = F
         user_id=user.id if user else None,
         user_email=user.email if user else None,
         user_name=user.full_name if user else None,
-        proof_image_url=tx.proof_image_url if include_proof else None,
+        proof_image_url=url_for(tx.proof_image_url) if include_proof else None,
     )
     return data

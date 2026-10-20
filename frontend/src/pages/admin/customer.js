@@ -5,6 +5,7 @@ import { icon } from '../../lib/icons.js';
 import { confirmDialog, errorState, openDialog, skeletonRows, toast, toastError } from '../../lib/ui.js';
 import { session } from '../../session.js';
 import { pageHeader, pill, signedAmount } from '../common.js';
+import { avatar } from '../../lib/avatar.js';
 import { setAdmin, viewAsCustomer } from './customer-actions.js';
 
 const FLAGS = [
@@ -70,7 +71,7 @@ export default async function customer(outlet, { id }) {
 
         <aside class="grid content-start gap-6">
           <section class="panel p-5">
-            <h2 class="panel-title">Profile</h2>
+            <div class="flex items-center gap-3">${avatar(u, 'md')}<h2 class="panel-title">Profile</h2></div>
             <dl class="mt-3 grid grid-cols-[6rem_1fr] gap-y-2 text-sm">
               <dt class="text-muted">Email</dt><dd class="break-all">${u.email}
                 ${u.email_verified ? html`<span class="pill-settled mt-1">Confirmed</span>` : html`<span class="pill-neutral mt-1">Unconfirmed</span>`}</dd>

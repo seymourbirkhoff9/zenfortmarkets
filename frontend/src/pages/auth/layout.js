@@ -17,6 +17,10 @@ export function authLayout({ title, intro, form, aside }) {
           ${intro ? html`<p class="mt-2 text-muted">${intro}</p>` : ''}
           <div class="mt-8">${form}</div>
         </div>
+        <nav aria-label="Legal" class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+          <a class="hover:text-ink hover:underline" href="/terms.html">Terms</a>
+          <a class="hover:text-ink hover:underline" href="/privacy.html">Privacy</a>
+          <a class="hover:text-ink hover:underline" href="/risk.html">Risk Disclosure</a></nav>
       </main>
       <aside class="hidden border-l border-line bg-surface lg:flex lg:items-center lg:px-14">${aside}</aside>
     </div>`);

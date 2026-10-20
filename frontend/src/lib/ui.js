@@ -43,9 +43,9 @@ export function openDialog(spec) {
       <form method="dialog" novalidate class="flex max-h-[85vh] flex-col">
         <header class="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <h2 id="${titleId}" class="font-serif text-xl">${spec.title}</h2>
-          <button type="button" data-close class="-mr-1 rounded p-1 text-muted hover:text-ink" aria-label="Close">
+          ${spec.dismissable === false ? '' : html`<button type="button" data-close class="-mr-1 rounded p-1 text-muted hover:text-ink" aria-label="Close">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
-          </button>
+          </button>`}
         </header>
         <div class="grid gap-4 overflow-y-auto px-5 py-5">
           <div data-body class="grid gap-4"></div>
@@ -76,9 +76,11 @@ export function openDialog(spec) {
     };
 
     dlg.addEventListener('close', () => { dlg.remove(); resolve(result); });
+    if (spec.dismissable === false) dlg.addEventListener('cancel', (e) => e.preventDefault());   // Escape
     dlg.addEventListener('click', (e) => {
-      if (e.target === dlg || e.target.closest('[data-close]')) dlg.close();
-      else if (e.target.closest('a[href]')) dlg.close();      // following a link leaves the dialog
+      if ((e.target === dlg && spec.dismissable !== false) || e.target.closest('[data-close]')) dlg.close();
+      // Following a link leaves the dialog, unless it opens in a new tab (e.g. Terms while accepting them).
+      else if (e.target.closest('a[href]:not([target="_blank"])')) dlg.close();
     });
 
     form.addEventListener('submit', async (e) => {
@@ -152,6 +154,19 @@ export async function fileToDataUrl(file, { allowPdf = false } = {}) {
     if (url.length * 0.75 < MAX_BYTES) return url;
   }
   throw new Error('That image is too large even after compression. Crop it and try again.');
+}
+
+/** Profile photo: centre-crop to a square and shrink to `size` px (JPEG), whatever the camera produced. */
+export async function fileToSquareDataUrl(file, size = 512) {
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('Choose a PNG, JPG or WebP image.');
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) throw new Error('That image couldn’t be read. Try another file.');
+  const side = Math.min(bitmap.width, bitmap.height);
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = Math.min(size, side);
+  canvas.getContext('2d').drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side,
+    0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.88);
 }
 
 const readAsDataUrl = (file) => new Promise((resolve, reject) => {

@@ -4,6 +4,7 @@ app/routers/auth.py — sign up, sessions, email verification, profile and KYC.
 import secrets
 import string
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -14,7 +15,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import AuditLog, KYCStatus, User, Wallet
 from app.schemas import (
-    EmailVerifyRequest, KYCSubmitRequest, LoginRequest, SignUpRequest, TokenResponse, UserOut,
+    AvatarUpload, EmailVerifyRequest, KYCSubmitRequest, LoginRequest, SignUpRequest, TokenResponse, UserOut,
 )
 from app.security import (
     ADMIN_COOKIE, CSRF_HEADER, CSRF_VALUE, SESSION_COOKIE, decode_access_payload, decode_access_token,
@@ -24,7 +25,8 @@ from app.security import (
 from app.services.admin_alerts import notify_admins
 from app.services.email_templates import render_email
 from app.services.notification_service import queue_email
-from app.utils.uploads import DOCUMENT_TYPES, validate_data_url
+from app.services import storage
+from app.utils.uploads import DOCUMENT_TYPES, IMAGE_TYPES, validate_data_url
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
@@ -69,6 +71,7 @@ def signup(payload: SignUpRequest, db: Session = Depends(get_db)):
         phone=payload.phone, is_active=True, is_admin=False, is_verified=False, email_verified=False,
         referral_code=_generate_unique_referral_code(db),
         referred_by_id=referrer.id if referrer else None,
+        terms_version=settings.TERMS_VERSION, terms_accepted_at=datetime.now(timezone.utc),
     )
     db.add(user)
     db.flush()
@@ -223,11 +226,47 @@ def delete_account(response: Response, current_user: User = Depends(get_current_
     current_user.email = f"deleted+{uuid.uuid4().hex[:12]}@deleted.invalid"
     current_user.full_name = "Closed account"
     current_user.phone = None
+    old_files = (current_user.kyc_document_url, current_user.avatar_url)
     current_user.kyc_document_url = None
+    current_user.avatar_url = None
     db.commit()
+    for ref in old_files:
+        storage.remove(ref)
     clear_session_cookie(response)
     response.status_code = 204
     return response
+
+
+# ── Consent and profile photo ─────────────────
+@router.post("/accept-terms", response_model=UserOut)
+def accept_terms(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Record acceptance of the current Terms and Privacy Policy (asked again when they change)."""
+    current_user.terms_version = settings.TERMS_VERSION
+    current_user.terms_accepted_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+
+@router.post("/avatar", response_model=UserOut)
+def upload_avatar(payload: AvatarUpload, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    image = validate_data_url(payload.image, IMAGE_TYPES, "Profile photo")
+    old = current_user.avatar_url
+    current_user.avatar_url = storage.store(image, f"{current_user.id}", private=False)
+    db.commit()
+    db.refresh(current_user)
+    storage.remove(old)               # after the commit: never lose the new photo over a cleanup failure
+    return current_user
+
+
+@router.delete("/avatar", response_model=UserOut)
+def remove_avatar(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    old = current_user.avatar_url
+    current_user.avatar_url = None
+    db.commit()
+    db.refresh(current_user)
+    storage.remove(old)
+    return current_user
 
 
 # ── KYC ───────────────────────────────────────
@@ -237,10 +276,13 @@ def submit_kyc(payload: KYCSubmitRequest, current_user: User = Depends(get_curre
     if current_user.kyc_status not in (KYCStatus.UNVERIFIED, KYCStatus.REJECTED):
         raise HTTPException(status_code=400,
                             detail=f"Your verification is already {current_user.kyc_status.value.lower()}.")
-    current_user.kyc_document_url = validate_data_url(payload.kyc_document_url, DOCUMENT_TYPES, "ID document")
+    doc = validate_data_url(payload.kyc_document_url, DOCUMENT_TYPES, "ID document")
+    old = current_user.kyc_document_url
+    current_user.kyc_document_url = storage.store(doc, f"kyc/{current_user.id}", private=True)
     current_user.kyc_status = KYCStatus.PENDING
     current_user.kyc_rejection_reason = None
     notify_admins(db, "Identity check submitted", f"{current_user.email} submitted an ID document.", "kyc")
     db.commit()
     db.refresh(current_user)
+    storage.remove(old)
     return current_user

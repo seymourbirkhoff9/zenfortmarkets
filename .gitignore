@@ -1,15 +1,21 @@
-backend/.venv/
+# secrets
 .env
+*.env
+!.env.example
+
+# python
+backend/.venv/
 __pycache__/
 *.pyc
+
+# node
+node_modules/
+frontend/dist/
+
+# one-off local scripts with real credentials
 backend/create_admin_user.py
 backend/credit_user_wallet.py
 backend/test_*.py
-frontend/node_modules/
-frontend/.next/
-frontend/.vercel/
-frontend/.env
-frontend/.env.local
-frontend/.env.production
-frontend/.env.development
-frontend/.env.test
+
+# local file storage (development)
+backend/uploads/

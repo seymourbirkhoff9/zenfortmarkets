@@ -116,8 +116,17 @@ class SignUpRequest(BaseModel):
     country: CountryEnum              # Swagger renders this as a dropdown (JSON body)
     phone: Optional[str] = None
     referral_code: Optional[str] = None
+    # Must be True: the user ticked "I agree to the Terms and Privacy Policy".
+    # validate_default: an OMITTED field must fail too (Pydantic skips validators on defaults otherwise).
+    accept_terms: bool = Field(default=False, validate_default=True)
 
-    # ADD THIS VALIDATOR HERE:
+    @field_validator("accept_terms")
+    @classmethod
+    def terms_required(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("Please accept the Terms and Privacy Policy to create an account.")
+        return v
+
     @field_validator("country", mode="before")
     @classmethod
     def normalize_country(cls, v):
@@ -178,6 +187,21 @@ class UserOut(BaseModel):
     # Set only while an admin is viewing this account (view-only impersonation)
     impersonated_by: Optional[str] = None
     impersonation_expires_at: Optional[datetime] = None
+    avatar_url: Optional[str] = None          # browser-ready URL (converted from the storage reference)
+    terms_version: Optional[str] = None
+    terms_accepted_at: Optional[datetime] = None
+
+    @field_validator("avatar_url")
+    @classmethod
+    def avatar_public_url(cls, v):
+        from app.services.storage import url_for
+        return url_for(v) if v else None
+
+    @computed_field
+    @property
+    def terms_current(self) -> bool:
+        from app.config import settings
+        return self.terms_version == settings.TERMS_VERSION
     referral_count: int = 0
     total_referral_earned: Decimal = Decimal("0")
     created_at: datetime
@@ -325,6 +349,15 @@ class InvestRequest(BaseModel):
     """User subscribes to a plan with a specific amount."""
     plan_id: uuid.UUID
     amount: Decimal
+    # Must be True: the user ticked "I've read the Risk Disclosure" (validated even when omitted)
+    accept_risk: bool = Field(default=False, validate_default=True)
+
+    @field_validator("accept_risk")
+    @classmethod
+    def risk_required(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("Please confirm you've read the Risk Disclosure.")
+        return v
 
     @field_validator("amount")
     @classmethod
@@ -668,6 +701,10 @@ class AdminUserDetail(BaseModel):
     investments: List[UserInvestmentResponse]
     transactions: List[TransactionOut]
     referred_by_email: Optional[str] = None
+
+
+class AvatarUpload(BaseModel):
+    image: str        # data URL; validated and moved to storage server-side
 
 
 class EmailVerifyRequest(BaseModel):

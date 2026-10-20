@@ -34,6 +34,11 @@ authLayout({
         <input class="input" id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" required /></div>
       <div class="field"><label class="label" for="referral_code">Referral code <span class="font-normal text-muted">(optional)</span></label>
         <input class="input uppercase" id="referral_code" name="referral_code" maxlength="8" value="${ref}" /></div>
+      <label class="flex items-start gap-2 text-sm">
+        <input type="checkbox" id="accept_terms" name="accept_terms" required class="mt-1 h-4 w-4 accent-settled" />
+        <span>I agree to the <a class="btn-link" href="/terms.html" target="_blank" rel="noopener">Terms of Service</a>
+          and <a class="btn-link" href="/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>, and I’ve read the
+          <a class="btn-link" href="/risk.html" target="_blank" rel="noopener">Risk Disclosure</a>.</span></label>
       <p id="error" class="error-text" role="alert" hidden></p>
       <button class="btn-primary w-full py-2.5" type="submit">Create account</button>
       <p class="text-sm text-muted">Already registered? <a class="btn-link" href="/login.html">Sign in</a></p>
@@ -57,6 +62,7 @@ $('#signup').addEventListener('submit', async (e) => {
   Object.keys(payload).forEach((k) => { if (k !== 'password' && k !== 'confirm_password') payload[k] = payload[k].trim(); });
   if (!payload.phone) delete payload.phone;
   if (!payload.referral_code) delete payload.referral_code;
+  payload.accept_terms = form.accept_terms.checked;
 
   const btn = form.querySelector('button[type=submit]');
   btn.disabled = true; btn.textContent = 'Creating account…';

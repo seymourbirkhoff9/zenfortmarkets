@@ -26,8 +26,13 @@ with sync_playwright() as p:
     # ── Operator sets up rails and a plan ─────────────────────────
     A.goto(f"{BASE}/login.html")
     A.fill("#email", "ops@zenfort.dev"); A.fill("#password", "Ops-pass-123"); A.click("button[type=submit]")
-    A.wait_for_url("**/admin.html**"); expect(A.get_by_role("heading", name="Nothing needs review")).to_be_visible()
-    step("admin signs in and lands on the console")
+    A.wait_for_url("**/admin.html**")
+    # Existing accounts haven't accepted any terms version yet, so the console asks once.
+    tdlg = A.locator("dialog[open]"); expect(tdlg).to_contain_text("We’ve updated our terms")
+    tdlg.locator("[name=agree]").check(); tdlg.get_by_role("button", name="Accept and continue").click()
+    expect(A.locator("dialog[open]")).to_have_count(0)
+    expect(A.get_by_role("heading", name="Nothing needs review")).to_be_visible()
+    step("admin signs in, accepts the current terms once, lands on the console")
 
     A.goto(f"{BASE}/admin.html#/methods"); A.get_by_role("button", name="Add method").first.click()
     d = A.locator("dialog[open]")
@@ -53,6 +58,9 @@ with sync_playwright() as p:
     C.fill("#full_name", evil); C.fill("#email", "tunde@zenfort.dev"); C.select_option("#country", "Nigeria")
     C.fill("#password", "Cust-pass-123"); C.fill("#confirm_password", "Cust-pass-123")
     expect(C.locator("#referral_code")).to_have_value("OPSADMIN")
+    C.click("button[type=submit]")
+    expect(C.get_by_role("heading", name="Check your inbox")).not_to_be_visible()      # consent box not ticked yet
+    C.check("#accept_terms")
     C.click("button[type=submit]"); expect(C.get_by_role("heading", name="Check your inbox")).to_be_visible()
     step("customer signs up via referral link")
     C.get_by_role("link", name="Sign in").click()
@@ -104,8 +112,16 @@ with sync_playwright() as p:
     step("customer Main wallet shows $500.00")
 
     # ── Invest ────────────────────────────────────────────────────
-    C.goto(f"{BASE}/app.html#/invest"); C.get_by_role("button", name="Invest", exact=True).click()
+    C.goto(f"{BASE}/app.html#/invest")
+    card = C.locator("li", has=C.get_by_role("heading", name="Starter 30"))
+    expect(card).to_contain_text("$100.00 earns $24.00 over 30 days")                 # worked example on the card
+    expect(card).to_contain_text("0.8%")
+    step("[B3] plan shown as a card with a worked example ($100 → $24.00 over 30 days)")
+    C.get_by_role("button", name="Invest in Starter 30").click()
     d = C.locator("dialog[open]"); d.locator("[name=amount]").fill("200")
+    d.get_by_role("button", name="Confirm investment").click()
+    expect(d).to_be_visible()                                                           # risk box not ticked
+    d.locator("[name=accept_risk]").check()
     expect(d.locator("#inv-preview dd").first).to_have_text("$48.00")
     d.get_by_role("button", name="Confirm investment").click()
     expect(C.get_by_text("You invested $200.00 in Starter 30.")).to_be_visible()
@@ -240,6 +256,37 @@ with sync_playwright() as p:
     for t in ["Viewed an account as the customer", "Stopped viewing as the customer", "Gave admin access", "Removed admin access"]:
         expect(A.get_by_text(t, exact=True).first).to_be_visible()
     step("[B2] audit log records viewing and role changes")
+
+    # ── Batch 3 ──────────────────────────────────────────────────────
+    C.goto(f"{BASE}/app.html#/settings"); C.locator("#photo-input").set_input_files("proof.png")
+    expect(C.get_by_text("Photo updated.")).to_be_visible()
+    src = C.locator("#account-avatar img").get_attribute("src")
+    assert "/avatars/" in src, src
+    assert C.request.get(BASE + src if src.startswith("/") else src).ok
+    expect(C.get_by_role("button", name="Remove")).to_be_visible()
+    A.goto(f"{BASE}/admin.html#/customers")
+    expect(A.locator("tr", has_text="tunde@zenfort.dev").locator("img")).to_have_count(1)
+    step("[B3] customer adds a profile photo: header updates at once, admin list shows it")
+
+    with psycopg2.connect("postgresql://zf:zf@localhost/zf_e2e") as pg, pg.cursor() as cur:
+        cur.execute("UPDATE users SET terms_version = '2020-01' WHERE email = 'tunde@zenfort.dev'")
+    C.goto(f"{BASE}/app.html#/"); C.reload()
+    dlg = C.locator("dialog[open]")
+    expect(dlg).to_contain_text("We’ve updated our terms")
+    C.keyboard.press("Escape"); expect(dlg).to_be_visible()                              # can't be dismissed
+    dlg.get_by_role("button", name="Accept and continue").click(); expect(dlg).to_be_visible()   # needs the tick
+    dlg.locator("[name=agree]").check(); dlg.get_by_role("button", name="Accept and continue").click()
+    expect(C.locator("dialog[open]")).to_have_count(0)
+    with psycopg2.connect("postgresql://zf:zf@localhost/zf_e2e") as pg, pg.cursor() as cur:
+        cur.execute("SELECT terms_version FROM users WHERE email = 'tunde@zenfort.dev'"); assert cur.fetchone()[0] == "2026-10"
+    step("[B3] updated terms: blocking prompt, needs the tick, acceptance recorded")
+
+    for path, heading in [("/terms.html", "Terms of Service"), ("/privacy.html", "Privacy Policy"), ("/risk.html", "Risk Disclosure")]:
+        A.goto(BASE + path)
+        expect(A.get_by_role("heading", name=heading, level=1)).to_be_visible()
+        expect(A.get_by_role("navigation", name="Legal")).to_be_visible()
+    A.screenshot(path="shots/risk-page.png", full_page=True)
+    step("[B3] Terms, Privacy and Risk pages render with the legal footer")
 
     C.goto(f"{BASE}/app.html#/"); C.reload(); C.click("#bell-btn")
     expect(C.locator("#bell-panel")).to_contain_text("Withdrawal sent")

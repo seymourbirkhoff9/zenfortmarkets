@@ -1,4 +1,5 @@
 import '../styles.css';
+import { footer } from './public/layout.js';
 import { api } from '../lib/api.js';
 import { html, render } from '../lib/dom.js';
 
@@ -60,7 +61,7 @@ render('#root', html`
     </section>
   </main>
 
-  <footer class="mx-auto max-w-6xl px-6 py-8 text-sm text-muted">Zenfort Markets is a teaching project. Do not send real funds.</footer>`);
+  ${footer()}`);
 
 // Signed-in visitors get a direct way back in.
 api.auth.me({ quiet401: true }).then((u) => {

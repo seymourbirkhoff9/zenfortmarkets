@@ -13,6 +13,9 @@ import pytest
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 if not TEST_DB:
     pytest.skip("Set TEST_DATABASE_URL to a disposable Postgres database.", allow_module_level=True)
+import tempfile
+os.environ.setdefault("LOCAL_UPLOAD_DIR", tempfile.mkdtemp(prefix="zf-uploads-"))
+os.environ.update(SUPABASE_URL="", SUPABASE_SERVICE_ROLE_KEY="")       # tests use local file storage
 os.environ.update(DATABASE_URL=TEST_DB, SECRET_KEY=os.environ.get("SECRET_KEY", "x" * 40),
                   RESEND_API_KEY="re_XXXX", ENABLE_SCHEDULER="false", DB_KEEP_WARM="false")
 
@@ -63,7 +66,7 @@ def make_user(client):
     def _make(referral_code=None):
         email = f"user-{uuid.uuid4().hex[:8]}@test.dev"
         body = {"full_name": "Tunde Test", "email": email, "password": "User-pass-1",
-                "confirm_password": "User-pass-1", "country": "Nigeria"}
+                "confirm_password": "User-pass-1", "country": "Nigeria", "accept_terms": True}
         if referral_code:
             body["referral_code"] = referral_code
         r = client.post("/api/auth/signup", json=body)

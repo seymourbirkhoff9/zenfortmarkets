@@ -35,6 +35,7 @@ from app.services.email_templates import render_email, usd
 from app.services.ledger import credit, debit, lock_wallet, lock_wallet_by_id, money
 from app.services.notification_service import send_notification_and_email
 from app.services.referral_service import process_referral_milestone
+from app.services import storage
 from app.services.parallel import run_parallel
 from app.services.roi import run_roi_accrual
 from app.services.serializers import admin_tx_view, tx_view
@@ -508,7 +509,8 @@ def kyc_document(user_id: str, admin=Depends(get_current_admin), db: Session = D
     user = _get_user(db, user_id=user_id)
     if not user.kyc_document_url:
         raise HTTPException(status_code=404, detail="No document on file.")
-    return {"user_id": str(user.id), "document": user.kyc_document_url}
+    return {"user_id": str(user.id), "document": storage.url_for(user.kyc_document_url),
+            "content_type": storage.content_type(user.kyc_document_url)}
 
 
 @router.patch("/kyc/{user_id}/review", response_model=UserOut)

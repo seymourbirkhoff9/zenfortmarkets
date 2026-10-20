@@ -3,6 +3,7 @@ import { html, on, render } from '../../lib/dom.js';
 import { date } from '../../lib/format.js';
 import { emptyState, errorState, skeletonRows } from '../../lib/ui.js';
 import { pageHeader } from '../common.js';
+import { avatar } from '../../lib/avatar.js';
 import { session } from '../../session.js';
 import { menuItems, runMenuAction } from './customer-actions.js';
 
@@ -43,8 +44,9 @@ export default async function customers(outlet, _p, query) {
       render(rowsEl, items.length ? html`<div class="overflow-x-auto"><table class="table">
         <thead><tr><th>Customer</th><th>Country</th><th>Identity</th><th>Standing</th><th>Joined</th><th><span class="sr-only">Actions</span></th></tr></thead>
         <tbody>${items.map((u) => html`<tr data-href="#/customers/${u.id}">
-          <td><a class="font-medium hover:underline" href="#/customers/${u.id}">${u.full_name}</a>${u.is_admin ? html` <span class="pill-neutral ml-1">Admin</span>` : ''}
-            <span class="block text-xs text-muted">${u.email}</span></td>
+          <td><div class="flex items-center gap-3">${avatar(u)}<div class="min-w-0">
+            <a class="font-medium hover:underline" href="#/customers/${u.id}">${u.full_name}</a>${u.is_admin ? html` <span class="pill-neutral ml-1">Admin</span>` : ''}
+            <span class="block truncate text-xs text-muted">${u.email}</span></div></div></td>
           <td>${u.country || '—'}</td>
           <td><span class="${KYC[u.kyc_status]}">${KYC_TEXT[u.kyc_status]}</span></td>
           <td>${!u.is_active ? html`<span class="pill-neutral">Closed</span>` : u.is_blocked ? html`<span class="pill-rejected">Restricted</span>`

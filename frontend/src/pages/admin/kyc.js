@@ -27,18 +27,20 @@ export default async function kyc(outlet) {
 
   on(outlet, 'click', '[data-review]', async (_, el) => {
     const u = rows.find((r) => r.id === el.dataset.review);
-    let doc;
-    try { doc = (await api.admin.kycDocument(u.id)).document; } catch (err) { return toastError(err); }
-    // PDFs render from a blob: URL; browsers refuse to frame data: PDFs.
+    let doc, type;
+    try { ({ document: doc, content_type: type } = await api.admin.kycDocument(u.id)); } catch (err) { return toastError(err); }
+    // Files arrive as short-lived links (or, for old records, data: URLs). Browsers won't frame a
+    // data: PDF, so those are converted to a blob: URL; a linked PDF can be framed directly.
+    const isPdf = type === 'application/pdf';
     let blobUrl = null;
-    if (doc.startsWith('data:application/pdf')) blobUrl = URL.createObjectURL(await (await fetch(doc)).blob());
+    if (isPdf && doc.startsWith('data:')) blobUrl = URL.createObjectURL(await (await fetch(doc)).blob());
 
     const done = await openDialog({
       title: `${u.full_name}`, wide: true, submitLabel: 'Save decision',
       body: html`
         <div class="grid gap-5 md:grid-cols-[1.4fr_1fr]">
           <div class="rounded border border-line bg-sunken p-2">
-            ${blobUrl ? html`<iframe src="${blobUrl}" title="ID document" class="h-[60vh] w-full rounded"></iframe>`
+            ${isPdf ? html`<iframe src="${blobUrl || doc}" title="ID document" class="h-[60vh] w-full rounded"></iframe>`
               : html`<img src="${doc}" alt="ID document for ${u.full_name}" class="mx-auto max-h-[60vh] rounded object-contain" />`}
           </div>
           <div class="grid content-start gap-4">

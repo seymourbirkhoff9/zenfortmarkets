@@ -2,8 +2,9 @@ import { api } from './lib/api.js';
 import { $, $$, html, on, render } from './lib/dom.js';
 import { ago } from './lib/format.js';
 import { icon } from './lib/icons.js';
+import { avatar } from './lib/avatar.js';
 import { currentTheme, toggleTheme } from './lib/theme.js';
-import { toastError } from './lib/ui.js';
+import { openDialog, toastError } from './lib/ui.js';
 import { invalidate } from './lib/cache.js';
 import { session } from './session.js';
 
@@ -66,7 +67,7 @@ export function mountShell({ area, user, nav }) {
             </div>
             <div class="relative">
               <button id="account-btn" class="flex items-center gap-2 rounded py-1.5 pl-2 pr-2.5 hover:bg-sunken" aria-expanded="false" aria-controls="account-menu">
-                <span class="grid h-8 w-8 place-items-center rounded-full bg-sunken text-sm font-semibold">${initials(user.full_name)}</span>
+                <span id="account-avatar">${avatar(user)}</span>
                 <span class="hidden text-left text-sm leading-tight sm:block">
                   <span class="block font-medium">${user.full_name}</span>
                   <span class="block text-xs text-muted">${user.email}</span>
@@ -86,6 +87,9 @@ export function mountShell({ area, user, nav }) {
   wireChrome();
   wireProgress();
   if (user.impersonated_by) wireImpersonation(user);
+  else if (!user.terms_current) askForTerms();
+  // Settings broadcasts profile changes (e.g. a new photo) so the header updates immediately.
+  window.addEventListener('zf:user-updated', (e) => render('#account-avatar', avatar(e.detail)));
   const stopPolling = startNotifications(area);
   return {
     setActive(path) {
@@ -109,7 +113,6 @@ export function mountShell({ area, user, nav }) {
   };
 }
 
-const initials = (name = '') => name.split(/\s+/).filter(Boolean).slice(0, 2).map((s) => s[0].toUpperCase()).join('') || '?';
 
 function closeMenu() {
   $('#sidebar').classList.add('-translate-x-full');
@@ -154,6 +157,25 @@ function popover(btnSel, panelSel, onOpen) {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !panel.hidden) { panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); btn.focus(); }
   });
+}
+
+/* ── Terms acceptance ─────────────────────────────────────────────── */
+async function askForTerms() {
+  const accepted = await openDialog({
+    title: 'We’ve updated our terms', dismissable: false,
+    submitLabel: 'Accept and continue', cancelLabel: 'Sign out',
+    body: html`
+      <p class="text-muted">Please review the updated documents before continuing:</p>
+      <ul class="grid gap-1.5 text-sm">
+        <li><a class="btn-link" href="/terms.html" target="_blank" rel="noopener">Terms of Service</a></li>
+        <li><a class="btn-link" href="/privacy.html" target="_blank" rel="noopener">Privacy Policy</a></li>
+        <li><a class="btn-link" href="/risk.html" target="_blank" rel="noopener">Risk Disclosure</a></li>
+      </ul>
+      <label class="flex items-start gap-2 text-sm"><input type="checkbox" name="agree" required class="mt-1 h-4 w-4 accent-settled" />
+        <span>I’ve read and agree to the Terms of Service and Privacy Policy.</span></label>`,
+    onSubmit: async () => { session.user = await api.auth.acceptTerms(); return true; },
+  });
+  if (!accepted) { try { await api.auth.logout(); } finally { location.href = '/login.html'; } }
 }
 
 /* ── View-only impersonation ───────────────────────────────────────── */

@@ -25,6 +25,7 @@ from app.services.admin_alerts import notify_admins
 from app.services.ledger import credit, debit, lock_wallet, money
 from app.services.notification_service import queue_email
 from app.services.email_templates import render_email, usd
+from app.services import storage
 from app.services.serializers import tx_view
 from app.utils.uploads import IMAGE_TYPES, validate_data_url
 
@@ -166,7 +167,7 @@ def get_transaction(tx_id: str, current_user: User = Depends(get_current_user), 
     if not tx or (tx.sender_wallet_id not in ids and tx.receiver_wallet_id not in ids):
         raise HTTPException(status_code=404, detail="Transaction not found.")
     data = tx_view(tx, ids)
-    data["proof_image_url"] = tx.proof_image_url
+    data["proof_image_url"] = storage.url_for(tx.proof_image_url)     # short-lived link for private files
     return data
 
 
@@ -204,8 +205,10 @@ def create_deposit(payload: DepositCreateRequest,
             Transaction.status != "rejected").first()
         if dup:
             raise HTTPException(status_code=409, detail="A deposit with this transaction hash was already submitted.")
-    proof = validate_data_url(payload.proof_image_url, IMAGE_TYPES, "Payment screenshot") \
-        if payload.proof_image_url else None
+    proof = None
+    if payload.proof_image_url:
+        valid = validate_data_url(payload.proof_image_url, IMAGE_TYPES, "Payment screenshot")
+        proof = storage.store(valid, f"proofs/{current_user.id}", private=True)
 
     main = db.query(Wallet).filter(Wallet.user_id == current_user.id, Wallet.wallet_type == "main").first()
     if not main:

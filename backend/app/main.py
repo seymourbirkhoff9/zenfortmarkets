@@ -19,7 +19,7 @@ import time
 from fastapi import Request
 
 from app.database import SessionLocal, engine, start_request_stats, warm_pool
-from app.routers import admin, admin_emails, auth, investments, leaderboard, notifications, users, wallets
+from app.routers import admin, admin_emails, auth, files, investments, leaderboard, notifications, users, wallets
 from app.services.roi import run_roi_accrual
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -95,7 +95,7 @@ async def server_timing(request: Request, call_next):
     return response
 
 
-for r in (auth, wallets, investments, admin, notifications, admin_emails, leaderboard, users):
+for r in (auth, wallets, investments, admin, notifications, admin_emails, leaderboard, users, files):
     app.include_router(r.router)
 
 
