@@ -34,7 +34,8 @@ def list_active_plans(current_user: User = Depends(get_current_user), db: Sessio
             .order_by(InvestmentPlan.min_amount.asc()).all())
 
 
-@router.post("/", response_model=UserInvestmentResponse, status_code=201)
+@router.post("", response_model=UserInvestmentResponse, status_code=201)
+@router.post("/", response_model=UserInvestmentResponse, status_code=201, include_in_schema=False)
 def create_investment(payload: InvestRequest, current_user: User = Depends(get_current_user),
                       db: Session = Depends(get_db)):
     if current_user.is_blocked:

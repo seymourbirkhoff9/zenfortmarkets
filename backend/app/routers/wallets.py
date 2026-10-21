@@ -43,6 +43,7 @@ def _require_not_blocked(user: User) -> None:
 
 
 # ── Balances ──────────────────────────────────
+@router.get("", response_model=List[WalletOut])
 @router.get("/", response_model=List[WalletOut])
 def list_wallets(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return (db.query(Wallet).filter(Wallet.user_id == current_user.id)
@@ -180,7 +181,8 @@ def _get_method(db: Session, method_id) -> PaymentMethod:
     return m
 
 
-@router.post("/deposits/", response_model=TransactionOut, status_code=201)
+@router.post("/deposits", response_model=TransactionOut, status_code=201)
+@router.post("/deposits/", response_model=TransactionOut, status_code=201, include_in_schema=False)
 def create_deposit(payload: DepositCreateRequest,
                    current_user: User = Depends(get_current_user),
                    db: Session = Depends(get_db)):
@@ -229,7 +231,8 @@ def create_deposit(payload: DepositCreateRequest,
 
 
 # ── Withdrawals ───────────────────────────────
-@router.post("/withdrawals/", response_model=TransactionOut, status_code=201)
+@router.post("/withdrawals", response_model=TransactionOut, status_code=201)
+@router.post("/withdrawals/", response_model=TransactionOut, status_code=201, include_in_schema=False)
 def create_withdrawal(payload: WithdrawalCreateRequest,
                       current_user: User = Depends(get_current_user),
                       db: Session = Depends(get_db)):
