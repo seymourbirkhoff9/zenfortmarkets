@@ -19,3 +19,7 @@ backend/test_*.py
 
 # local file storage (development)
 backend/uploads/
+
+# virtual environments (any name)
+.venv*/
+backend/.venv*/
