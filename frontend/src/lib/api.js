@@ -165,7 +165,7 @@ export const api = {
     create: (plan_id, amount) => post('/investments/', { plan_id, amount, accept_risk: true }),
   },
   notifications: {
-    list: () => get('/notifications/'),
+    list: () => get('/notifications'),
     unread: () => get('/notifications/unread-count'),
     read: (id) => patch(`/notifications/${id}/read`),
     readAll: () => patch('/notifications/read-all'),
