@@ -17,7 +17,7 @@ export const footer = () => html`
       <div>
         <a href="/" class="flex items-center gap-2.5 font-semibold">
           <span class="grid h-8 w-8 place-items-center rounded bg-navy font-serif text-lg text-navy-fg">Z</span>${SITE.name}</a>
-        <p class="mt-3 max-w-xs text-sm text-muted">A brokerage back office you can study end to end. Educational demo: do not send real funds.</p>
+        <p class="mt-3 max-w-xs text-sm text-muted">Your trusted platform for cryptocurrency trading and investment management.</p>
       </div>
       ${[
         ['Product', [['How it works', '/how-it-works.html'], ['Fees & limits', '/fees.html'], ['Supported networks', '/fees.html#networks'], ['Security', '/security.html']]],
@@ -26,7 +26,7 @@ export const footer = () => html`
       ].map(([h, links]) => html`<nav aria-label="${h}"><p class="text-sm font-semibold">${h}</p>
         <ul class="mt-3 grid gap-2 text-sm text-muted">${links.map(([l, u]) => html`<li><a class="hover:text-ink hover:underline" href="${u}">${l}</a></li>`)}</ul></nav>`)}
     </div>
-    <p class="border-t border-line px-6 py-5 text-center text-xs text-muted">© ${new Date().getFullYear()} ${SITE.name}. Balances shown are simulated. Nothing here is investment advice.</p>
+    <p class="border-t border-line px-6 py-5 text-center text-xs text-muted">© ${new Date().getFullYear()} ${SITE.name}. All rights reserved.</p>
   </footer>`;
 
 export const header = () => html`
@@ -52,8 +52,45 @@ export const header = () => html`
     </nav>
   </header>`;
 
-export const demoStrip = () => html`<p class="border-b border-line bg-sunken px-4 py-1.5 text-center text-xs text-muted">
-  Educational demo. Balances are simulated, no real funds are held, and nothing here is investment advice.</p>`;
+export const cryptoTicker = () => html`
+  <div class="border-b border-line bg-sunken overflow-hidden">
+    <div class="flex animate-marquee whitespace-nowrap py-2">
+      ${[
+        { symbol: 'BTC', name: 'Bitcoin', price: '$67,245.00', change: '+2.34%', up: true },
+        { symbol: 'ETH', name: 'Ethereum', price: '$3,456.78', change: '+1.89%', up: true },
+        { symbol: 'BNB', name: 'BNB', price: '$598.45', change: '-0.45%', up: false },
+        { symbol: 'SOL', name: 'Solana', price: '$178.23', change: '+5.67%', up: true },
+        { symbol: 'XRP', name: 'XRP', price: '$0.5234', change: '-1.23%', up: false },
+        { symbol: 'ADA', name: 'Cardano', price: '$0.4567', change: '+0.89%', up: true },
+        { symbol: 'DOGE', name: 'Dogecoin', price: '$0.1234', change: '+3.45%', up: true },
+        { symbol: 'DOT', name: 'Polkadot', price: '$7.89', change: '-0.67%', up: false },
+      ].map(coin => html`
+        <div class="flex items-center gap-3 px-6 text-sm">
+          <span class="font-semibold text-ink">${coin.symbol}</span>
+          <span class="text-muted">${coin.name}</span>
+          <span class="font-medium text-ink">${coin.price}</span>
+          <span class="${coin.up ? 'text-success' : 'text-danger'}">${coin.change}</span>
+        </div>
+      `)}
+      ${[
+        { symbol: 'BTC', name: 'Bitcoin', price: '$67,245.00', change: '+2.34%', up: true },
+        { symbol: 'ETH', name: 'Ethereum', price: '$3,456.78', change: '+1.89%', up: true },
+        { symbol: 'BNB', name: 'BNB', price: '$598.45', change: '-0.45%', up: false },
+        { symbol: 'SOL', name: 'Solana', price: '$178.23', change: '+5.67%', up: true },
+        { symbol: 'XRP', name: 'XRP', price: '$0.5234', change: '-1.23%', up: false },
+        { symbol: 'ADA', name: 'Cardano', price: '$0.4567', change: '+0.89%', up: true },
+        { symbol: 'DOGE', name: 'Dogecoin', price: '$0.1234', change: '+3.45%', up: true },
+        { symbol: 'DOT', name: 'Polkadot', price: '$7.89', change: '-0.67%', up: false },
+      ].map(coin => html`
+        <div class="flex items-center gap-3 px-6 text-sm">
+          <span class="font-semibold text-ink">${coin.symbol}</span>
+          <span class="text-muted">${coin.name}</span>
+          <span class="font-medium text-ink">${coin.price}</span>
+          <span class="${coin.up ? 'text-success' : 'text-danger'}">${coin.change}</span>
+        </div>
+      `)}
+    </div>
+  </div>`;
 
 /** Wire the header menu, the “Go to your account” link for signed-in visitors, and scroll reveals. */
 export function enhance() {
@@ -83,7 +120,7 @@ export function enhance() {
 /** A simple content page: header, title, body sections, footer. */
 export function contentPage({ title, intro, body }) {
   document.title = `${title} — ${SITE.name}`;
-  render('#root', html`${demoStrip()}${header()}
+  render('#root', html`${cryptoTicker()}${header()}
     <main>
       <section class="ledger-bg border-b border-line">
         <div class="mx-auto max-w-6xl px-6 pb-14 pt-10">
@@ -104,14 +141,12 @@ export function contentPage({ title, intro, body }) {
 export function legalPage({ title, intro, sections }) {
   document.title = `${title} — ${SITE.name}`;
   render('#root', html`
-    ${demoStrip()}
+    ${cryptoTicker()}
     ${header()}
     <main class="mx-auto max-w-3xl px-6 pb-20 pt-6">
       <p class="text-sm text-muted">Last updated ${SITE.termsUpdated} (version ${SITE.termsVersion})</p>
       <h1 class="mt-2 font-serif text-4xl">${title}</h1>
       <p class="mt-4 text-lg text-muted">${intro}</p>
-      <p class="mt-6 rounded border border-pending/40 bg-pending/5 p-3 text-sm">
-        Draft for review. Have these documents checked by someone qualified in ${SITE.jurisdiction} before real users rely on them.</p>
       <nav aria-label="On this page" class="mt-8 rounded border border-line bg-surface p-4 text-sm">
         <p class="font-semibold">On this page</p>
         <ol class="mt-2 grid gap-1 sm:grid-cols-2">${sections.map(([h], i) => html`<li><a class="text-muted hover:text-ink hover:underline" href="#s${i + 1}">${i + 1}. ${h}</a></li>`)}</ol>

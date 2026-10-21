@@ -9,6 +9,7 @@ import { currentTheme, toggleTheme } from './lib/theme.js';
 import { openDialog, toastError } from './lib/ui.js';
 import { invalidate } from './lib/cache.js';
 import { session } from './session.js';
+import { cryptoTicker } from './pages/public/layout.js';
 
 /**
  * Mounts the signed-in chrome around #outlet.
@@ -28,10 +29,8 @@ export function mountShell({ area, user, nav }) {
       <span id="imp-left" class="num opacity-90" aria-hidden="true"></span><span id="imp-left-sr" class="sr-only"></span>
       <button id="imp-exit" class="rounded bg-white/20 px-3 py-1 text-xs font-semibold hover:bg-white/30">Exit to console</button>
     </div>` : html`
-    <p class="border-b border-line bg-sunken px-4 py-1.5 text-center text-xs text-muted">
-      Demo environment. Balances are simulated and nothing here is investment advice.
-    </p>`}
-    <div class="lg:grid lg:min-h-[calc(100vh-29px)] lg:grid-cols-[15.5rem_1fr]">
+    ${cryptoTicker()}`}
+    <div class="lg:grid lg:min-h-[calc(100vh-41px)] lg:grid-cols-[15.5rem_1fr]">
       <aside id="sidebar" class="fixed inset-y-0 left-0 z-40 w-64 -translate-x-full border-r border-line bg-surface transition-transform lg:static lg:w-auto lg:translate-x-0" aria-label="Main">
         <div class="flex h-16 items-center gap-2.5 border-b border-line px-5">
           <span class="grid h-8 w-8 place-items-center rounded bg-navy font-serif text-lg font-semibold text-navy-fg">Z</span>

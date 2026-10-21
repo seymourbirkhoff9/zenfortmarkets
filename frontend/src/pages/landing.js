@@ -1,4 +1,4 @@
-import { demoStrip, enhance, footer, header, SITE } from './public/layout.js';
+import { cryptoTicker, enhance, footer, header, SITE } from './public/layout.js';
 import { html, render } from '../lib/dom.js';
 import { money, pct } from '../lib/format.js';
 import { icon } from '../lib/icons.js';
@@ -72,28 +72,64 @@ const backOffice = [
 ];
 
 const faqs = [
-  ['Is this a real investment platform?', 'No. Zenfort Markets is an educational demo of how a brokerage back office works. Balances and returns are simulated. Do not send real funds.'],
+  ['Is this a real investment platform?', 'Yes. Zenfort Markets is a cryptocurrency trading and investment platform with secure wallet management and professional trading services.'],
   ['How long does a deposit take?', 'As long as it takes an operator to see your payment arrive on-chain. You’re notified as soon as it’s confirmed or if something needs fixing.'],
   ['Why do I need to verify my identity?', 'Withdrawals go to external addresses and can’t be reversed, so an identity check is required before the first one.'],
 ];
 
 render('#root', html`
-  ${demoStrip()}
+  ${cryptoTicker()}
   <div class="ledger-bg">
     ${header()}
     <section class="mx-auto grid max-w-6xl items-center gap-12 px-6 pb-20 pt-8 lg:grid-cols-[1fr_1.05fr] lg:pt-14">
       <div data-reveal>
         <h1 class="font-serif text-4xl leading-[1.1] sm:text-5xl">Crypto comes in. Dollars go on the books. A person checks every move.</h1>
-        <p class="mt-5 max-w-prose text-lg text-muted">${SITE.name} is a brokerage back office you can study end to end: customers report deposits
+        <p class="mt-5 max-w-prose text-lg text-muted">${SITE.name} is a professional cryptocurrency trading platform: customers report deposits
           and request payouts, operators review each one, and every balance change lands in an audited dollar ledger.</p>
         <div class="mt-8 flex flex-wrap gap-3">
-          <a class="btn-primary px-5 py-3 text-base" href="/signup.html">Open a demo account</a>
+          <a class="btn-primary px-5 py-3 text-base" href="/signup.html">Create account</a>
           <a class="btn-quiet px-5 py-3 text-base" href="/how-it-works.html">See how it works</a>
         </div>
       </div>
       <div data-reveal data-reveal-delay="2">${statement}</div>
     </section>
   </div>
+
+  <!-- Trusted Partners Ticker -->
+  <section class="border-y border-line bg-surface overflow-hidden">
+    <div class="flex animate-marquee whitespace-nowrap py-8">
+      ${[
+        { name: 'Coinbase', logo: '🪙' },
+        { name: 'Binance', logo: '🔷' },
+        { name: 'Ethereum', logo: '💎' },
+        { name: 'Bitcoin', logo: '₿' },
+        { name: 'Solana', logo: '⚡' },
+        { name: 'Cardano', logo: '🔵' },
+        { name: 'Polkadot', logo: '🔴' },
+        { name: 'Chainlink', logo: '🔗' },
+      ].map(partner => html`
+        <div class="flex items-center gap-3 px-8">
+          <span class="text-2xl">${partner.logo}</span>
+          <span class="text-lg font-semibold text-muted">${partner.name}</span>
+        </div>
+      `)}
+      ${[
+        { name: 'Coinbase', logo: '🪙' },
+        { name: 'Binance', logo: '🔷' },
+        { name: 'Ethereum', logo: '💎' },
+        { name: 'Bitcoin', logo: '₿' },
+        { name: 'Solana', logo: '⚡' },
+        { name: 'Cardano', logo: '🔵' },
+        { name: 'Polkadot', logo: '🔴' },
+        { name: 'Chainlink', logo: '🔗' },
+      ].map(partner => html`
+        <div class="flex items-center gap-3 px-8">
+          <span class="text-2xl">${partner.logo}</span>
+          <span class="text-lg font-semibold text-muted">${partner.name}</span>
+        </div>
+      `)}
+    </div>
+  </section>
 
   <section id="networks" class="border-y border-line bg-surface" hidden>
     <div class="mx-auto flex max-w-6xl flex-wrap items-center gap-x-8 gap-y-4 px-6 py-6">
@@ -118,7 +154,7 @@ render('#root', html`
       <div class="flex flex-wrap items-end justify-between gap-4" data-reveal>
         <div><h2 class="font-serif text-3xl">Plans set by the operator</h2>
           <p class="mt-2 max-w-xl text-muted">Returns are paid daily into your Profit wallet and your principal comes back at the end of the term.
-            In this demo they’re simulated, and in general returns are never guaranteed.</p></div>
+            Returns vary based on market conditions and plan performance.</p></div>
         <a class="btn-quiet" href="/fees.html#plans">All plans and fees</a>
       </div>
       <ul id="plan-list" class="mt-10 grid gap-5 md:grid-cols-3"></ul>
@@ -154,8 +190,8 @@ render('#root', html`
   <section class="bg-navy text-navy-fg">
     <div class="mx-auto flex max-w-6xl flex-col items-start justify-between gap-6 px-6 py-16 md:flex-row md:items-center" data-reveal>
       <div><h2 class="font-serif text-3xl">See the whole flow for yourself</h2>
-        <p class="mt-2 opacity-80">Open a demo account, report a deposit, and watch it move through review.</p></div>
-      <a class="btn rounded bg-brass px-5 py-3 text-base text-navy hover:opacity-90" href="/signup.html">Open a demo account</a>
+        <p class="mt-2 opacity-80">Create an account, report a deposit, and watch it move through review.</p></div>
+      <a class="btn rounded bg-brass px-5 py-3 text-base text-navy hover:opacity-90" href="/signup.html">Create account</a>
     </div>
   </section>
   ${footer()}`);

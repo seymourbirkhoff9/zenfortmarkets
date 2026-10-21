@@ -52,7 +52,7 @@ export default async function invest(outlet) {
   function draw() {
     const { plans, mine, main } = state;
     render(outlet, html`
-      ${pageHeader('Invest', 'Plans are set by the operator. Returns are paid daily into your Profit wallet and your principal comes back to Main at the end of the term. In this demo, returns are simulated.')}
+      ${pageHeader('Invest', 'Plans are set by the operator. Returns are paid daily into your Profit wallet and your principal comes back to Main at the end of the term. Returns vary based on market conditions.')}
       <section aria-labelledby="plans-h">
         <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h2 id="plans-h" class="panel-title">Available plans</h2>

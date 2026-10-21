@@ -8,7 +8,7 @@ export const SITE = {
   domain: 'zenfortmarkets.com',
   contactEmail: 'support@zenfortmarkets.com',     // ← a mailbox you actually read
   operator: "Zenfort Market's Administrators",          // ← who runs the site
-  jurisdiction: '[United States / New York]',               // ← whose law governs the Terms
+  jurisdiction: 'United States / New York',               // ← whose law governs the Terms
   termsVersion: '2026-10',
   termsUpdated: '20 October 2026',
 };
