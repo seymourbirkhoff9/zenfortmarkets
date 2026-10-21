@@ -81,8 +81,7 @@ def render_email(heading: str, name: str, paragraphs: Sequence[str],
       You’re receiving this because you have an account at Zenfort Markets.<br>
       <a href="{escape(_site('/terms.html'), quote=True)}" style="color:{MUTED};">Terms</a> &nbsp;|&nbsp;
       <a href="{escape(_site('/privacy.html'), quote=True)}" style="color:{MUTED};">Privacy</a> &nbsp;|&nbsp;
-      <a href="{escape(_site('/risk.html'), quote=True)}" style="color:{MUTED};">Risk Disclosure</a><br>
-      Educational demo. Do not send real funds.
+      <a href="{escape(_site('/risk.html'), quote=True)}" style="color:{MUTED};">Risk Disclosure</a>
     </td></tr>
   </table>
 </td></tr></table>
