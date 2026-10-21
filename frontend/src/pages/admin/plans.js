@@ -50,7 +50,11 @@ export default async function plans(outlet) {
   async function load() {
     render(outlet, html`${head}<div class="panel">${skeletonRows(5)}</div>`);
     try {
-      const [plansRes, invs] = await Promise.all([api.admin.plans(), api.admin.investments({ status: 'active', limit: 200 })]);
+      const [plansRes, invs] = await Promise.all([
+        api.admin.plans(),
+        api.admin.investments({ status: 'active', limit: 200 }).catch(() => []),
+      ]);
+
       list = plansRes;
       const byPlan = {};
       invs.forEach((i) => { const b = (byPlan[i.plan_name] ||= { n: 0, capital: 0 }); b.n += 1; b.capital += Number(i.amount_invested); });
@@ -61,7 +65,8 @@ export default async function plans(outlet) {
         <section class="panel">
           ${list.length ? html`<div class="overflow-x-auto"><table class="table">
             <thead><tr><th>Plan</th><th>Rate</th><th>Term</th><th>Amount range</th><th>Active investments</th><th>Visible</th><th><span class="sr-only">Actions</span></th></tr></thead>
-            <tbody>${list.map((p) => { const b = byPlan[p.name] || { n: 0, capital: 0 }; return html`<tr>
+            <tbody>${list.map((p) => {
+        const b = byPlan[p.name] || { n: 0, capital: 0 }; return html`<tr>
               <td><span class="font-medium">${p.name}</span><span class="block text-xs text-muted">Created ${date(p.created_at)}</span></td>
               <td class="figure">${pct(p.daily_roi_percent)}<span class="block font-sans text-xs text-muted">per day</span></td>
               <td class="num">${p.duration_days} days</td>
@@ -71,8 +76,9 @@ export default async function plans(outlet) {
                 ${p.is_active ? 'Open' : 'Paused'}</label></td>
               <td><div class="flex justify-end gap-2"><button class="btn-quiet btn-sm" data-edit="${p.id}">Edit</button>
                 ${b.n ? '' : html`<button class="btn-quiet btn-sm text-rejected" data-delete="${p.id}">Delete</button>`}</div></td>
-            </tr>`; })}</tbody></table></div>`
-            : emptyState('No plans yet', 'Create a plan to let customers invest.', html`<button class="btn-primary" data-action="new">New plan</button>`)}
+            </tr>`;
+      })}</tbody></table></div>`
+          : emptyState('No plans yet', 'Create a plan to let customers invest.', html`<button class="btn-primary" data-action="new">New plan</button>`)}
         </section>`);
     } catch (err) { render(outlet, html`${head}<div class="panel">${errorState(err)}</div>`); }
   }
@@ -84,8 +90,10 @@ export default async function plans(outlet) {
     const a = el.dataset.action;
     if (a === 'retry') return load();
     if (a === 'new') {
-      const done = await openDialog({ title: 'New plan', submitLabel: 'Publish plan', body: planForm(), onMount: wirePreview,
-        onSubmit: (v) => api.admin.createPlan(clean(v)) });
+      const done = await openDialog({
+        title: 'New plan', submitLabel: 'Publish plan', body: planForm(), onMount: wirePreview,
+        onSubmit: (v) => api.admin.createPlan(clean(v))
+      });
       if (done) { toast(`${done.name} is live.`); load(); }
     }
     if (a === 'run') {
@@ -96,8 +104,10 @@ export default async function plans(outlet) {
   });
   on(outlet, 'click', '[data-edit]', async (_, el) => {
     const p = find(el.dataset.edit);
-    const done = await openDialog({ title: `Edit ${p.name}`, submitLabel: 'Save changes', body: planForm(p), onMount: wirePreview,
-      onSubmit: (v) => api.admin.updatePlan(p.id, clean(v)) });
+    const done = await openDialog({
+      title: `Edit ${p.name}`, submitLabel: 'Save changes', body: planForm(p), onMount: wirePreview,
+      onSubmit: (v) => api.admin.updatePlan(p.id, clean(v))
+    });
     if (done) { toast('Plan saved.'); load(); }
   });
   on(outlet, 'change', '[data-toggle]', async (_, el) => {

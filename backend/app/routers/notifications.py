@@ -42,7 +42,29 @@ def unread_count(current_user: User = Depends(get_current_user), db: Session = D
 
 
 # ──────────────────────────────────────────────
-# PATCH /api/notifications/{id}/read — Mark as read
+# PATCH /api/notifications/read-all — Mark all as read
+# NOTE: MUST be registered BEFORE /{notification_id}/read so that FastAPI
+# matches the static "read-all" path segment first and does not treat the
+# literal string "read-all" as a notification UUID (which caused a 404
+# that silently broke the notification bell panel).
+# ──────────────────────────────────────────────
+@router.patch("/read-all", status_code=status.HTTP_200_OK)
+def mark_all_notifications_read(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Mark all notifications for the authenticated user as read."""
+    (
+        db.query(Notification)
+        .filter(Notification.user_id == current_user.id, Notification.is_read == False)
+        .update({"is_read": True})
+    )
+    db.commit()
+    return {"status": "ok", "message": "All notifications marked as read"}
+
+
+# ──────────────────────────────────────────────
+# PATCH /api/notifications/{id}/read — Mark single as read
 # ──────────────────────────────────────────────
 @router.patch("/{notification_id}/read", response_model=NotificationResponse)
 def mark_notification_read(
@@ -63,21 +85,3 @@ def mark_notification_read(
     db.commit()
     db.refresh(notification)
     return notification
-
-
-# ──────────────────────────────────────────────
-# PATCH /api/notifications/read-all — Mark all as read
-# ──────────────────────────────────────────────
-@router.patch("/read-all", status_code=status.HTTP_200_OK)
-def mark_all_notifications_read(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Mark all notifications for the authenticated user as read."""
-    (
-        db.query(Notification)
-        .filter(Notification.user_id == current_user.id, Notification.is_read == False)
-        .update({"is_read": True})
-    )
-    db.commit()
-    return {"status": "ok", "message": "All notifications marked as read"}

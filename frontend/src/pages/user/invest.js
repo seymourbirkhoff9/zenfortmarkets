@@ -43,7 +43,12 @@ export default async function invest(outlet) {
   async function load() {
     render(outlet, html`${pageHeader('Invest')}<div class="panel">${skeletonRows(5)}</div>`);
     try {
-      const [plans, mine, wallets] = await Promise.all([api.investments.plans(), api.investments.mine(), api.wallets.list()]);
+      const [plans, mine, wallets] = await Promise.all([
+        api.investments.plans(),
+        api.investments.mine(),
+        api.wallets.list().catch(() => []),
+      ]);
+
       state = { plans, mine, main: Number(wallets.find((w) => w.wallet_type === 'main')?.balance || 0) };
       draw();
     } catch (err) { render(outlet, html`${pageHeader('Invest')}<div class="panel">${errorState(err)}</div>`); }
@@ -59,7 +64,7 @@ export default async function invest(outlet) {
           <p class="text-sm text-muted">Main wallet <span class="figure ml-1 text-ink">${money(main)}</span></p>
         </div>
         ${plans.length ? html`<ul class="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">${plans.map(planCard)}</ul>`
-          : html`<div class="panel">${emptyState('No plans are open', 'The operator hasn’t published any plans yet.')}</div>`}
+        : html`<div class="panel">${emptyState('No plans are open', 'The operator hasn’t published any plans yet.')}</div>`}
       </section>
 
       <section class="panel mt-6" aria-labelledby="mine-h">
@@ -77,7 +82,7 @@ export default async function invest(outlet) {
             <td class="text-right figure">${money(i.amount_invested)}</td>
             <td class="text-right figure text-settled">${money(i.total_earned)}</td>
           </tr>`)}</tbody></table></div>`
-          : emptyState('No investments yet', 'Choose a plan above. The amount comes from your Main wallet.')}
+        : emptyState('No investments yet', 'Choose a plan above. The amount comes from your Main wallet.')}
       </section>`);
   }
 

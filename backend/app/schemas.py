@@ -613,10 +613,12 @@ class AdminWithdrawalReviewRequest(BaseModel):
 # Payment methods
 # ──────────────────────────────────────────────
 class PaymentMethodBase(BaseModel):
+    method_type: str = "crypto"   # "crypto" | "bank"
     asset: str
     network: str
     deposit_address: Optional[str] = None
     deposit_memo: Optional[str] = None
+    bank_details: Optional[str] = None   # JSON string with bank-specific fields
     deposit_enabled: bool = True
     withdraw_enabled: bool = True
     min_deposit: Decimal = Decimal("0")
@@ -641,7 +643,9 @@ class PaymentMethodBase(BaseModel):
 
     @model_validator(mode="after")
     def deposit_needs_address(self):
-        if self.deposit_enabled and not (self.deposit_address and self.deposit_address.strip()):
+        # Crypto methods require a deposit address when deposits are enabled.
+        # Bank methods use bank_details instead, so no address is needed.
+        if self.deposit_enabled and self.method_type != "bank" and not (self.deposit_address and self.deposit_address.strip()):
             raise ValueError("A deposit address is required when deposits are enabled.")
         return self
 
@@ -651,10 +655,12 @@ class PaymentMethodCreate(PaymentMethodBase):
 
 
 class PaymentMethodUpdate(BaseModel):
+    method_type: Optional[str] = None
     asset: Optional[str] = None
     network: Optional[str] = None
     deposit_address: Optional[str] = None
     deposit_memo: Optional[str] = None
+    bank_details: Optional[str] = None
     deposit_enabled: Optional[bool] = None
     withdraw_enabled: Optional[bool] = None
     min_deposit: Optional[Decimal] = None
