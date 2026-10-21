@@ -8,7 +8,7 @@ export function toast(message, tone = 'ok') {
     region = document.createElement('div');
     region.setAttribute('role', 'status');
     region.setAttribute('aria-live', 'polite');
-    region.className = 'fixed bottom-4 right-4 z-[60] grid gap-2 w-[min(24rem,calc(100vw-2rem))]';
+    region.className = 'fixed bottom-20 right-4 z-[60] grid gap-2 w-[min(24rem,calc(100vw-2rem))]';   // above the Help button
     document.body.append(region);
   }
   const el = document.createElement('div');
@@ -101,7 +101,8 @@ export function openDialog(spec) {
         errorEl.hidden = false;
         Object.keys(err?.fields || {}).forEach((f) => form.querySelector(`[name="${f.split('.').pop()}"]`)?.setAttribute('aria-invalid', 'true'));
       } finally {
-        btn.disabled = false; btn.textContent = label;
+        btn.disabled = false;
+        if (btn.textContent === 'Working…') btn.textContent = label;   // multi-step dialogs set their own next label
       }
     });
 

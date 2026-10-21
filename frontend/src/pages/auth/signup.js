@@ -68,7 +68,7 @@ $('#signup').addEventListener('submit', async (e) => {
   btn.disabled = true; btn.textContent = 'Creating account…';
   try {
     await api.auth.signup(payload);
-    render('#root main > div', html`
+    render('#auth-body', html`
       <div role="status">
         <h1 class="font-serif text-3xl">Check your inbox</h1>
         <p class="mt-3 text-muted">We sent a confirmation link to <strong class="text-ink">${payload.email}</strong>. You can sign in now and confirm later.</p>

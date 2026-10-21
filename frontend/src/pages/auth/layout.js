@@ -1,6 +1,8 @@
 import '../../styles.css';
 import { html, render } from '../../lib/dom.js';
 import { themeButton, wireThemeButton } from '../../lib/theme.js';
+import { initTranslation, languageButton, wireLanguageButtons } from '../../lib/translate.js';
+import { mountAssistant } from '../../lib/assistant/widget.js';
 
 /** Two-column auth layout: form on the left, a short factual note on the right. */
 export function authLayout({ title, intro, form, aside }) {
@@ -14,9 +16,9 @@ export function authLayout({ title, intro, form, aside }) {
           <a href="/" class="flex items-center gap-2.5 font-semibold">
             <span class="grid h-8 w-8 place-items-center rounded bg-navy font-serif text-lg text-navy-fg">Z</span>Zenfort Markets
           </a>
-          ${themeButton()}
+          <div class="flex items-center gap-1">${languageButton()}${themeButton()}</div>
         </div>
-        <div class="my-auto w-full max-w-sm py-10">
+        <div id="auth-body" class="my-auto w-full max-w-sm py-10">
           <h1 class="font-serif text-3xl">${title}</h1>
           ${intro ? html`<p class="mt-2 text-muted">${intro}</p>` : ''}
           <div class="mt-8">${form}</div>
@@ -29,6 +31,9 @@ export function authLayout({ title, intro, form, aside }) {
       <aside class="hidden border-l border-line bg-surface lg:flex lg:items-center lg:px-14">${aside}</aside>
     </div>`);
   wireThemeButton();
+  wireLanguageButtons();
+  initTranslation();
+  mountAssistant();
 }
 
 /** What happens to money here, step by step — the honest version. */

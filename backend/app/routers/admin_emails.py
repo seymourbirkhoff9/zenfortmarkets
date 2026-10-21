@@ -1,4 +1,3 @@
-from __future__ import annotations
 """
 app/routers/admin_emails.py — Admin email broadcast and targeted messaging
 """
@@ -11,7 +10,9 @@ from app.database import get_db
 from app.models import User, BroadcastLog, UserInvestment, KYCStatus
 from app.schemas import AdminSendUserEmailRequest, AdminBroadcastEmailRequest, BroadcastLogResponse
 from app.security import get_current_admin
-from app.services.notification_service import send_notification_and_email
+from app.config import settings
+from app.models import Notification
+from app.services import mailer
 from app.services.email_templates import render_email
 from app.database import SessionLocal
 
@@ -20,117 +21,69 @@ logger = logging.getLogger("zenfort.admin_emails")
 router = APIRouter(prefix="/api/admin/emails", tags=["Admin Emails"])
 
 
-def _send_email_to_user(
-    db: Session,
-    user: User,
-    subject: str,
-    body: str,
-    notification_title: str,
-):
-    """
-    Helper function to send email and create notification for a single user.
-    Used in both single-user send and broadcast background tasks.
-    """
-    try:
-        send_notification_and_email(
-            db=db,
-            user=user,
-            title=notification_title,
-            message=body,
-            notification_type="general",
-            email_subject=subject,
-            # Admin text is rendered as escaped paragraphs, never as raw HTML.
-            email_html=render_email(subject, user.full_name,
-                                    [p.strip() for p in body.split("\n\n") if p.strip()]),
-        )
-        logger.info("Email sent to %s: %s", user.email, subject)
-    except Exception as e:
-        logger.error("Failed to send email to %s: %s", user.email, e)
+def _admin_html(user: User, subject: str, body: str) -> str:
+    # Admin text is rendered as escaped paragraphs, never as raw HTML.
+    return render_email(subject, user.full_name, [p.strip() for p in body.split("\n\n") if p.strip()],
+                        cta=("Open your account", f"{settings.FRONTEND_URL.rstrip('/')}/app.html"))
 
 
-def _broadcast_emails_task(
-    _request_db: Session,
-    admin_id: str,
-    subject: str,
-    body: str,
-    target_filter: str,
-    broadcast_log_id: str,
-):
-    """
-    Background task to broadcast emails to filtered users.
-    Updates recipient_count on the BroadcastLog after completion.
-    """
-    # The request's session is closed by the time a background task runs,
-    # so the task owns a fresh one.
+def _in_app(db: Session, user: User, title: str, body: str) -> None:
+    db.add(Notification(user_id=user.id, title=title, message=body[:2000], type="general", is_read=False))
+
+
+def _broadcast_emails_task(_request_db: Session, admin_id: str, subject: str, body: str,
+                           target_filter: str, broadcast_log_id: str):
+    """Background: in-app notice for everyone, then email in batches of 100; records delivered/failed."""
     db = SessionLocal()
     try:
-        # Build query based on target_filter
-        query = db.query(User).filter(User.is_admin == False)
-
+        query = db.query(User).filter(User.is_admin.is_(False), User.is_active.is_(True))
         if target_filter == "verified_kyc":
             query = query.filter(User.kyc_status == KYCStatus.VERIFIED)
         elif target_filter == "unverified_kyc":
             query = query.filter(User.kyc_status == KYCStatus.UNVERIFIED)
         elif target_filter == "active_investors":
-            # Users with at least one active investment
-            query = query.join(UserInvestment).filter(
-                UserInvestment.status == "active"
-            ).distinct()
-        # For "all", no additional filter
-
+            query = query.join(UserInvestment).filter(UserInvestment.status == "active").distinct()
         users = query.all()
-        recipient_count = 0
+        for u in users:
+            _in_app(db, u, "New announcement", body)
+        db.commit()
 
-        for user in users:
-            _send_email_to_user(
-                db=db,
-                user=user,
-                subject=subject,
-                body=body,
-                notification_title="New Announcement",
-            )
-            recipient_count += 1
-
-        # Update broadcast log with recipient count
-        broadcast_log = db.query(BroadcastLog).filter(BroadcastLog.id == broadcast_log_id).first()
-        if broadcast_log:
-            broadcast_log.recipient_count = recipient_count
+        results = mailer.send_batch([{"to": u.email, "subject": subject, "html": _admin_html(u, subject, body)} for u in users])
+        failed = [r for r in results if not r.ok]
+        log = db.query(BroadcastLog).filter(BroadcastLog.id == broadcast_log_id).first()
+        if log:
+            log.recipient_count = len(users)
+            log.delivered_count = len(results) - len(failed)
+            log.failed_count = len(failed)
+            log.last_error = failed[-1].reason if failed else None
             db.commit()
-
-        logger.info("Broadcast completed: %d recipients", recipient_count)
-
-    except Exception as e:
-        logger.error("Broadcast task failed: %s", e, exc_info=True)
+        logger.info("Broadcast finished: %d recipients, %d failed", len(users), len(failed))
+    except Exception:
+        logger.exception("Broadcast task failed")
     finally:
         db.close()
 
 
 # ──────────────────────────────────────────────
-# POST /api/admin/emails/send-user — Send to single user
+# POST /api/admin/emails/send-user — one customer, delivered while you wait
 # ──────────────────────────────────────────────
 @router.post("/send-user", status_code=status.HTTP_200_OK)
-def send_email_to_user(
-    payload: AdminSendUserEmailRequest,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Send a custom email and create an in-app notification for a specific user."""
+def send_email_to_user(payload: AdminSendUserEmailRequest, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    """
+    Adds an in-app message and sends the email immediately, reporting whether the email
+    service accepted it, so the admin knows if it actually went out.
+    """
     user = db.query(User).filter(User.id == payload.user_id).first()
     if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
-
+        raise HTTPException(status_code=404, detail="Customer not found.")
     if user.is_admin:
-        raise HTTPException(status_code=400, detail="Cannot send emails to admin users.")
-
-    _send_email_to_user(
-        db=db,
-        user=user,
-        subject=payload.subject,
-        body=payload.body,
-        notification_title="Message from Admin",
-    )
-
-    return {"status": "ok", "message": "Email sent successfully"}
+        raise HTTPException(status_code=400, detail="Admins can’t be emailed from here.")
+    _in_app(db, user, "Message from support", payload.body)
+    db.commit()
+    result = mailer.send(user.email, payload.subject, _admin_html(user, payload.subject, payload.body))
+    return {"in_app": True, "email_sent": result.ok, "email_error": result.reason,
+            "message": "Delivered to their inbox and their notifications." if result.ok
+            else "Added to their notifications, but the email wasn’t delivered."}
 
 
 # ──────────────────────────────────────────────

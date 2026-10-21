@@ -7,10 +7,10 @@ Email failures are logged but never crash the primary transaction.
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
-from app.services.email_templates import html_to_text
 from sqlalchemy.orm import Session
 from app.models import User, Notification
-from app.services.email import resend, settings, logger as email_logger
+from app.config import settings
+from app.services import mailer
 
 logger = logging.getLogger("zenfort.notification")
 
@@ -19,26 +19,9 @@ logger = logging.getLogger("zenfort.notification")
 _email_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="email")
 
 
-def _deliver(to: str, subject: str, html: str) -> None:
-    try:
-        resend.Emails.send({"from": settings.EMAIL_FROM, "to": [to], "subject": subject,
-                            "html": html, "text": html_to_text(html)})
-        logger.info("Email sent → %s: %s", to, subject)
-    except Exception as e:  # never propagate
-        logger.error("Failed to send email to %s: %s", to, e, exc_info=True)
-
-
-def queue_email(to: str, subject: str, html: str) -> None:
-    if not _api_key_present():
-        logger.info("[Mock Email] to=%s subject='%s'", to, subject)
-        return
-    _email_pool.submit(_deliver, to, subject, html)
-
-
-def _api_key_present() -> bool:
-    """Return True only when a real Resend API key is configured."""
-    key = (settings.RESEND_API_KEY or "").strip()
-    return bool(key) and not key.startswith("re_XXXX")
+def queue_email(to: str, subject: str, html: str, reply_to: str | None = None) -> None:
+    """Send in the background; failures are logged by the mailer (and never break the request)."""
+    _email_pool.submit(mailer.send, to, subject, html, reply_to)
 
 
 def send_notification_and_email(

@@ -25,7 +25,11 @@ export default async function broadcast(outlet) {
       const rows = await api.admin.broadcastHistory();
       render(outlet.querySelector('#history'), rows.length ? html`<ul class="divide-y divide-line">${rows.map((r) => html`
         <li class="px-5 py-3"><p class="font-medium">${r.subject}</p>
-          <p class="text-xs text-muted">${AUDIENCE[r.target_filter] || r.target_filter}. ${r.recipient_count} recipient${r.recipient_count === 1 ? '' : 's'}. ${dateTime(r.created_at)}</p></li>`)}</ul>`
+          <p class="text-xs text-muted">${AUDIENCE[r.target_filter] || r.target_filter}. ${dateTime(r.created_at)}</p>
+          <p class="mt-1 text-xs">${r.delivered_count == null ? html`<span class="pill-pending">Sending…</span>`
+            : r.failed_count ? html`<span class="pill-rejected">${r.delivered_count} of ${r.recipient_count} delivered</span>`
+            : html`<span class="pill-settled">Delivered to ${r.delivered_count}</span>`}</p>
+          ${r.failed_count && r.last_error ? html`<p class="mt-1 break-words text-xs text-rejected">${r.last_error}</p>` : ''}</li>`)}</ul>`
         : emptyState('Nothing sent yet', 'Your broadcasts will be listed here.'));
     } catch (err) { toastError(err); }
   }
@@ -37,7 +41,7 @@ export default async function broadcast(outlet) {
     if (!(await confirmDialog({ title: 'Send this email?', confirmLabel: 'Send', message: `“${v.subject}” goes to: ${AUDIENCE[v.target_filter]}. It can’t be recalled.` }))) return;
     const btn = f.querySelector('button');
     setBusy(btn, true, 'Sending…');
-    try { await api.admin.broadcast(v); f.reset(); toast('Sending. Recipient count updates when delivery finishes.'); setTimeout(history, 1500); }
+    try { await api.admin.broadcast(v); f.reset(); toast('Sending now. Delivery results appear in the list when it finishes.'); setTimeout(history, 2500); setTimeout(history, 8000); }
     catch (err) { toastError(err); } finally { setBusy(btn, false); }
   });
   await history();

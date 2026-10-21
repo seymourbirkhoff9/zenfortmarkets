@@ -6,6 +6,7 @@ import { avatar } from '../../lib/avatar.js';
 import { refreshUser, session } from '../../session.js';
 import { pageHeader } from '../common.js';
 import { passwordToggles } from '../../lib/password.js';
+import { twoFactorSection } from './twofactor.js';
 
 const KYC = {
   UNVERIFIED: ['pill-neutral', 'Not started'],
@@ -73,11 +74,15 @@ export default async function settings(outlet) {
           <button class="btn-primary justify-self-start">Change password</button>
         </form>`)}
 
+      ${section('tf-h', 'Two-factor sign-in', 'Adds a 6-digit code from your phone when you sign in, so a stolen password isn’t enough.',
+        html`<div id="twofactor" class="grid max-w-md gap-3"><div class="skeleton h-5 w-40"></div></div>`)}
+
       ${section('close-h', 'Close account', 'Withdraw your balance first. Your transaction history is kept for record-keeping.', html`
         <button class="btn-danger" data-action="close">Close my account</button>`)}
     </fieldset>`);
 
   passwordToggles(outlet);
+  twoFactorSection(outlet.querySelector('#twofactor'), ro);
 
   on(outlet, 'submit', '#profile', async (e) => {
     e.preventDefault();

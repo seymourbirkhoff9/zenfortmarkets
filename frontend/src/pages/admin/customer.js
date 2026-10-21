@@ -29,7 +29,9 @@ export default async function customer(outlet, { id }) {
     const [kc, kt] = KYC_TEXT[u.kyc_status];
     const self = u.id === session.user.id;
     render(outlet, html`
-      <a href="#/customers" class="btn-link mb-4 inline-block text-xs">All customers</a>
+      <a href="#/customers" class="btn-quiet btn-sm mb-5 inline-flex">
+        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+        All customers</a>
       ${pageHeader(u.full_name, '', html`
         ${!u.is_admin && u.is_active ? html`<button class="btn-quiet" data-action="view-as" title="Opens their account read-only for 30 minutes">View as customer</button>` : ''}
         <button class="btn-quiet" data-action="email">${icon('mail', 'h-4 w-4')}Email</button>
@@ -75,6 +77,9 @@ export default async function customer(outlet, { id }) {
             <dl class="mt-3 grid grid-cols-[6rem_1fr] gap-y-2 text-sm">
               <dt class="text-muted">Email</dt><dd class="break-all">${u.email}
                 ${u.email_verified ? html`<span class="pill-settled mt-1">Confirmed</span>` : html`<span class="pill-neutral mt-1">Unconfirmed</span>`}</dd>
+              <dt class="text-muted">Two-factor</dt><dd>${u.totp_enabled
+                ? html`<span class="pill-settled">On</span>${self ? '' : html` <button class="btn-link ml-1 text-xs" data-action="reset-2fa">Reset</button>`}`
+                : html`<span class="pill-neutral">Off</span>`}</dd>
               <dt class="text-muted">Identity</dt><dd><span class="${kc}">${kt}</span>
                 ${u.kyc_status === 'PENDING' ? html`<a class="btn-link mt-1 block text-xs" href="#/kyc">Review</a>` : ''}</dd>
               <dt class="text-muted">Country</dt><dd>${u.country || '—'}</dd>
@@ -129,6 +134,12 @@ export default async function customer(outlet, { id }) {
     try {
       if (a === 'retry') return load();
       if (a === 'view-as') return viewAsCustomer(d.user);
+      if (a === 'reset-2fa') {
+        const ok = await confirmDialog({ title: `Turn off two-factor sign-in for ${d.user.full_name}?`, danger: true, confirmLabel: 'Turn it off',
+          message: 'Only do this after confirming their identity, for example when they’ve lost their phone and recovery codes. They’ll be signed out everywhere and notified, and this is recorded in the audit log.' });
+        if (!ok) return;
+        await api.admin.resetTwoFactor(d.user.id); toast('Two-factor sign-in turned off.'); return load();
+      }
       if (a === 'promote' || a === 'demote') {
         if (await setAdmin(d.user, a === 'promote')) load();
         return;
@@ -145,7 +156,15 @@ export default async function customer(outlet, { id }) {
             <p class="hint">Sent as plain text. Also appears in their notifications.</p></div>`,
           onSubmit: (v) => api.admin.emailUser({ user_id: d.user.id, ...v }),
         });
-        if (sent) toast('Email sent.');
+        if (sent?.email_sent) toast('Delivered to their inbox and their notifications.');
+        else if (sent) {
+          toast('Added to their notifications, but the email wasn’t delivered.', 'warn');
+          openDialog({ title: 'Email not delivered', body: html`
+            <p class="text-muted">The message is in their in-app notifications, but the email service refused it:</p>
+            <p class="rounded border border-line bg-sunken p-3 font-mono text-xs">${sent.email_error || 'Unknown reason'}</p>
+            <p class="text-sm text-muted">Most often this means your sending domain isn’t verified in Resend yet. Until it is,
+              Resend only delivers to your own Resend account address.</p>` });
+        }
       }
     } catch (err) { toastError(err); }
   });

@@ -37,6 +37,8 @@ export function render(target, template) {
   const el = typeof target === 'string' ? document.querySelector(target) : target;
   el.innerHTML = toHTML(template);
   labelTables(el);
+  // Translation tools must never alter amounts, addresses or hashes.
+  el.querySelectorAll('.figure, .num, .font-mono, .copy-row').forEach((n) => { n.classList.add('notranslate'); n.setAttribute('translate', 'no'); });
   return el;
 }
 

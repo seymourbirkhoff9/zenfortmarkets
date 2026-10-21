@@ -21,6 +21,8 @@ export default defineConfig({
         login: page('login.html'),
         signup: page('signup.html'),
         verify: page('verify-email.html'),
+        forgot: page('forgot-password.html'),
+        reset: page('reset-password.html'),
         app: page('app.html'),
         admin: page('admin.html'),
         terms: page('terms.html'),

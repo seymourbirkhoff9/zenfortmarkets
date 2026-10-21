@@ -162,3 +162,8 @@
 @keyframes st-flash { 0% { background: rgb(var(--brass) / .18); } 100% { background: transparent; } }
 @media (prefers-reduced-motion: reduce) { .st-row { opacity: 1; transform: none; transition: none; } .st-flash { animation: none; } }
 @media print { [data-reveal], .st-row { opacity: 1 !important; transform: none !important; } }
+
+/* Google Website Translator: keep our layout, hide its banner, tooltip and highlights */
+iframe.skiptranslate, .goog-te-banner-frame, #goog-gt-tt, .goog-te-balloon-frame, .VIpgJd-ZVi9od-ORHb-OEVmcd { display: none !important; }
+body { top: 0 !important; }
+.goog-text-highlight { background: none !important; box-shadow: none !important; }

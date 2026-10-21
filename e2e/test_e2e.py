@@ -1,6 +1,7 @@
 """Browser test of the full operator/customer flow. Needs: pip install playwright && playwright install chromium.
 Run against a FRESH database with one admin ops@zenfort.dev / Ops-pass-123, API on :8000 and `npm run preview` on :3000.
 Put proof.png and id.png (any small PNGs) next to this file.Set E2E_BASE=http://localhost:8000 to test the single-service (Render-style) setup.
+Run the API with DEV_OUTBOX=true so the password-reset and support steps can read sent emails.
 """
 import re, sys, time
 from playwright.sync_api import sync_playwright, expect
@@ -217,7 +218,9 @@ with sync_playwright() as p:
     A.get_by_role("menuitem", name="View as customer").click()
     A.wait_for_url("**/app.html**")
     expect(A.get_by_text("View only: nothing can be changed.")).to_be_visible()
-    expect(A.get_by_text(re.compile(r"Ends in \d+ min"))).to_be_visible()
+    t1 = A.locator("#imp-left").inner_text(); A.wait_for_timeout(2200); t2 = A.locator("#imp-left").inner_text()
+    assert re.fullmatch(r"Ends in \d+:\d\d", t1) and t1 != t2, (t1, t2)
+    step(f"[B5] view-as countdown ticks live ({t1} → {t2})")
     expect(A.locator("p.figure.text-5xl")).to_have_text("$225.00")
     A.screenshot(path="shots/admin-viewing-as.png")
     A.get_by_role("button", name="Deposit").first.click()
@@ -238,6 +241,11 @@ with sync_playwright() as p:
     A.wait_for_url(re.compile(r".*/admin\.html#/customers/.+"))
     expect(A.get_by_role("heading", name=re.compile("Tunde"))).to_be_visible()
     step("[B2] Exit returns to the customer's page in the console")
+    A.get_by_role("button", name="Email").click(); d = A.locator("dialog[open]")
+    d.locator("[name=subject]").fill("About your account"); d.locator("[name=body]").fill("Hello from support."); d.get_by_role("button", name="Send email").click()
+    expect(A.get_by_text("Delivered to their inbox and their notifications.")).to_be_visible()
+    A.get_by_role("link", name="All customers").click(); A.wait_for_url(re.compile(r".*#/customers$"))
+    step("[B5] admin email reports delivery; back button returns to All customers")
 
     # Promote from the row menu, demote from the customer page
     A.goto(f"{BASE}/admin.html#/customers"); A.get_by_role("button", name=re.compile("Actions for Tunde")).click()
@@ -300,6 +308,93 @@ with sync_playwright() as p:
     C.click("#theme-btn"); C.click("body", position={"x": 5, "y": 400})
     C.screenshot(path="shots/customer-overview-dark.png", full_page=True)
     step("customer notifications show each review outcome; dark theme renders")
+
+    # ── Batch 5 ──────────────────────────────────────────────────────
+    import pyotp, json as _json, urllib.request as _url
+    def outbox():
+        with _url.urlopen(BASE + "/api/dev/outbox") as r: return _json.loads(r.read())
+
+    # Friendly errors: the API unreachable, and a proxy answering "Not found"
+    E = b.new_context().new_page()
+    E.route("**/api/auth/login", lambda r: r.abort("internetdisconnected"))
+    E.goto(f"{BASE}/login.html"); E.fill("#email", "x@y.dev"); E.fill("#password", "whatever1"); E.click("button[type=submit]")
+    expect(E.get_by_text("We couldn’t reach Zenfort Markets. Check your connection and try again.")).to_be_visible()
+    E.unroute("**/api/auth/login")
+    E.route("**/api/auth/login", lambda r: r.fulfill(status=404, content_type="text/html", body="<h1>404: NOT_FOUND</h1>"))
+    E.click("button[type=submit]")
+    expect(E.get_by_text("This service isn’t available right now. Please try again shortly.")).to_be_visible()
+    assert "Not found" not in E.locator("#error").inner_text()
+    E.close()
+    step("[B5] friendly errors: offline and 'Not found' become clear, actionable messages")
+
+    # Password reset by email (fresh account)
+    R = b.new_context(viewport={"width": 1280, "height": 900}).new_page(); watch(R, "reset")
+    R.request.post(f"{BASE}/api/auth/signup", data={"full_name": "Rita Reset", "email": "rita@zenfort.dev", "password": "Rita-pass-123",
+                   "confirm_password": "Rita-pass-123", "country": "Kenya", "accept_terms": True})
+    R.goto(f"{BASE}/login.html"); R.get_by_role("link", name="Forgot password?").click()
+    R.fill("#email", "rita@zenfort.dev"); R.click("button[type=submit]")
+    expect(R.get_by_text("If an account uses that email")).to_be_visible()
+    mail = next(m for m in outbox() if m["to"] == "rita@zenfort.dev" and "Reset your password" in m["subject"])
+    link = re.search(r'href="([^"]*reset-password\.html\?token=[^"]+)"', mail["html"]).group(1)
+    R.goto(BASE + link[link.index("/reset-password.html"):])
+    R.fill("#pw", "Rita-newpass-456"); R.fill("#pw2", "Rita-newpass-456"); R.click("button[type=submit]")
+    R.wait_for_url("**/login.html?reset=1"); expect(R.get_by_text("Password updated.")).to_be_visible()
+    R.fill("#email", "rita@zenfort.dev"); R.fill("#password", "Rita-newpass-456"); R.click("button[type=submit]")
+    R.wait_for_url("**/app.html**")
+    tdlg = R.locator("dialog[open]")
+    if tdlg.count(): tdlg.locator("[name=agree]").check(); tdlg.get_by_role("button", name="Accept and continue").click()
+    step("[B5] password reset: emailed link, new password, signed in")
+
+    # Two-factor: set up in Settings, then sign in with a code
+    R.goto(f"{BASE}/app.html#/settings"); R.get_by_role("button", name="Turn on two-factor sign-in").click()
+    d = R.locator("dialog[open]"); d.locator("[name=password]").fill("Rita-newpass-456"); d.get_by_role("button", name="Continue").click()
+    expect(d.locator("svg").first).to_be_visible()                                  # QR code rendered
+    secret = d.locator(".copy-row span").first.inner_text().replace(" ", "")
+    totp = pyotp.TOTP(secret)
+    d.locator("[name=code]").fill(totp.now()); d.get_by_role("button", name="Turn on").click()
+    expect(d.locator("ol li")).to_have_count(8)                                    # recovery codes shown once
+    d.get_by_role("button", name="I’ve saved my codes").click()
+    expect(R.get_by_text("Status: On")).to_be_visible()
+    R.click("#account-btn"); R.click("#logout-btn"); R.wait_for_url("**/login.html")
+    R.fill("#email", "rita@zenfort.dev"); R.fill("#password", "Rita-newpass-456"); R.click("button[type=submit]")
+    expect(R.get_by_role("heading", name="Two-factor sign-in")).to_be_visible()
+    R.fill("#code", "123456"); expect(R.get_by_text("That code isn’t right")).to_be_visible()
+    R.fill("#code", totp.at(time.time() + 30))                                       # next window: fresh, unused code
+    R.wait_for_url("**/app.html**")
+    step("[B5] two-factor: QR setup, 8 recovery codes, sign-in asks for and checks the code")
+
+    # Help assistant: anonymous visitor, then signed-in customer with live status and a hand-off
+    P = b.new_context().new_page(); watch(P, "public")
+    P.goto(f"{BASE}/"); P.get_by_role("button", name="Help").click()
+    P.locator("#zfa-input").fill("where is my deposit"); P.locator("#zfa-input").press("Enter")
+    expect(P.locator("#zfa-log")).to_contain_text("Sign in and ask again")
+    P.locator("#zfa-input").fill("purple elephant sandwich"); P.locator("#zfa-input").press("Enter")
+    expect(P.locator("#zfa-log")).to_contain_text("not sure I understood")
+    P.close()
+    C.goto(f"{BASE}/app.html#/"); C.get_by_role("button", name="Help").click()
+    C.locator("#zfa-log").get_by_role("button", name="Where is my deposit?").click()
+    expect(C.locator("#zfa-log")).to_contain_text("no deposits waiting for review")
+    C.locator("#zfa-input").fill("I sent to the wrong network"); C.locator("#zfa-input").press("Enter")
+    C.locator("#zfa-log").get_by_role("button", name="Contact support").last.click()
+    form = C.locator("#zfa-log form")
+    expect(form.locator("[name=email]")).to_have_value("tunde@zenfort.dev")              # pre-filled for signed-in users
+    form.get_by_role("button", name="Send to support").click()
+    expect(C.locator("#zfa-log")).to_contain_text("Your reference is ZF-")
+    sup = next(m for m in outbox() if "Support request" in m["subject"])
+    assert sup["to"] == "support@zenfortmarkets.online" and "wrong network" in sup["text"]
+    C.get_by_role("button", name="Close help").click()
+    step("[B5] help assistant: answers, live status, admits when unsure, hands off to support (email reaches support)")
+
+    # Translation: menu, choice remembered, graceful when Google is unreachable (as in this sandbox)
+    T = b.new_context().new_page(); watch(T, "translate")
+    T.goto(f"{BASE}/fees.html"); T.get_by_role("button", name="Translate this page").click()
+    expect(T.get_by_role("button", name="Français")).to_be_visible()
+    T.get_by_role("button", name="Français").click(); T.wait_for_load_state("load")
+    expect(T.get_by_text("Translation isn’t available right now")).to_be_visible(timeout=20000)
+    assert "googtrans=/en/fr" not in T.evaluate("document.cookie")                  # falls back to English cleanly
+    expect(T.locator("#methods .figure").first).to_have_attribute("translate", "no")  # money is never translated
+    T.close()
+    step("[B5] translate menu works; amounts protected; falls back to English if Google is unreachable")
 
     M = b.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True).new_page(); watch(M, "mobile")
     M.goto(f"{BASE}/login.html"); M.fill("#email", "tunde@zenfort.dev"); M.fill("#password", "Cust-pass-123"); M.click("button[type=submit]")

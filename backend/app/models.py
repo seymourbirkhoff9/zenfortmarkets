@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 from sqlalchemy import (
+    BigInteger,
     Column, String, Boolean, DateTime, Numeric, Integer, ForeignKey, Text, func, Enum as SQLEnum
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -43,6 +44,13 @@ class User(Base):
     avatar_url = Column(Text, nullable=True)            # storage reference, e.g. sb://avatars/<user>/<file>.jpg
     terms_version = Column(String(20), nullable=True)   # version of Terms/Privacy the user accepted
     terms_accepted_at = Column(DateTime(timezone=True), nullable=True)
+    # Bumped on password change/reset and 2FA changes: sessions carrying an older value stop working.
+    session_version = Column(Integer, nullable=False, default=0, server_default="0")
+    # Two-factor sign-in (authenticator app). The secret is encrypted with a key derived from SECRET_KEY.
+    totp_secret = Column(Text, nullable=True)
+    totp_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    totp_last_step = Column(BigInteger, nullable=True)       # stops a code being used twice
+    recovery_codes = Column(Text, nullable=True)             # JSON list of SHA-256 hashes, one-time use
     country = Column(String(100), nullable=True)
     phone = Column(String(50), nullable=True)
     # Compliance & Governance fields
@@ -199,6 +207,9 @@ class BroadcastLog(Base):
     body = Column(Text, nullable=False)
     target_filter = Column(String(50), nullable=False, default="all")  # "all", "verified_kyc", "active_investors", "unverified_kyc"
     recipient_count = Column(Integer, nullable=False, default=0)
+    delivered_count = Column(Integer, nullable=True)     # filled in when sending finishes
+    failed_count = Column(Integer, nullable=True)
+    last_error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 

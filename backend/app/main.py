@@ -19,7 +19,7 @@ import time
 from fastapi import Request
 
 from app.database import SessionLocal, engine, start_request_stats, warm_pool
-from app.routers import admin, admin_emails, auth, files, investments, leaderboard, notifications, public, users, wallets
+from app.routers import admin, admin_emails, auth, files, investments, leaderboard, notifications, public, support, users, wallets
 from app.services.roi import run_roi_accrual
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -70,14 +70,40 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_origins = [o.strip().rstrip("/") for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
+_origins += [o for o in (settings.FRONTEND_ORIGIN.rstrip("/"),) if o and o not in _origins]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=list({settings.FRONTEND_ORIGIN, "http://localhost:3000", "http://127.0.0.1:3000"}),
+    allow_origins=_origins,
+    allow_origin_regex=settings.CORS_ORIGIN_REGEX or None,     # Vercel preview deployments
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
-    expose_headers=["X-Total-Count", "Server-Timing", "X-DB-Queries"],
+    expose_headers=["X-Total-Count", "Server-Timing", "X-DB-Queries", "Retry-After"],
+    max_age=600,
 )
+
+
+# ── Friendly errors: never a bare "Not Found" / "Internal Server Error" ──
+from fastapi import HTTPException
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_errors(request: Request, exc: StarletteHTTPException):
+    detail = exc.detail
+    if exc.status_code == 404 and detail in ("Not Found", None):
+        detail = "We couldn’t find that. It may have moved, or the link is incomplete."
+    elif exc.status_code == 405:
+        detail = "That action isn’t available here."
+    return JSONResponse({"detail": detail}, status_code=exc.status_code, headers=getattr(exc, "headers", None))
+
+
+@app.exception_handler(Exception)
+async def unexpected_errors(request: Request, exc: Exception):
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse({"detail": "Something went wrong on our side. Please try again in a moment."}, status_code=500)
 
 @app.middleware("http")
 async def server_timing(request: Request, call_next):
@@ -95,8 +121,17 @@ async def server_timing(request: Request, call_next):
     return response
 
 
-for r in (auth, wallets, investments, admin, notifications, admin_emails, leaderboard, users, files, public):
+for r in (auth, wallets, investments, admin, notifications, admin_emails, leaderboard, users, files, public, support):
     app.include_router(r.router)
+
+
+if settings.DEV_OUTBOX:
+    from app.services import mailer as _mailer
+
+    @app.get("/api/dev/outbox", include_in_schema=False)
+    def dev_outbox():
+        """Development only: the last emails the app tried to send (newest first)."""
+        return list(reversed(_mailer.OUTBOX))
 
 
 @app.get("/health", tags=["Health"])

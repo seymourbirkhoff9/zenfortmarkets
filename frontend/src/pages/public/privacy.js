@@ -20,6 +20,10 @@ legalPage({
     ]],
     ['Cookies', [
       'We use one essential cookie to keep you signed in. It is not used for tracking. The site also remembers your light/dark preference in your browser.',
+      'If you choose a language with the globe button, the page is translated by Google Translate: Google receives the page text and sets a cookie (googtrans) to remember your language. Nothing is sent to Google unless you choose a language.',
+    ]],
+    ['Support assistant', [
+      'The Help assistant answers from information built into this site; your questions are not sent to an AI service. If you choose to contact support from it, your name, email, message and the conversation are emailed to our support team.',
     ]],
     ['Who we share it with', [
       'Service providers who process data for us: our database and file storage provider (Supabase), our email provider (Resend) and our hosting providers. They may only use it to provide their service to us.',

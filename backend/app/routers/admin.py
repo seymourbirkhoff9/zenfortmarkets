@@ -304,6 +304,24 @@ def set_role(user_id: str, payload: RoleUpdate, admin=Depends(get_current_admin)
     return user
 
 
+@router.post("/users/{user_id}/reset-2fa", response_model=UserOut)
+def reset_two_factor(user_id: str, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    """For a customer who lost their phone and recovery codes. Signs them out everywhere."""
+    user = _get_user(db, user_id=user_id)
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail="Turn off your own two-factor sign-in from Settings.")
+    if not user.totp_enabled:
+        return user
+    user.totp_enabled, user.totp_secret, user.totp_last_step, user.recovery_codes = False, None, None, None
+    user.session_version = (user.session_version or 0) + 1
+    _audit(db, admin, "RESET_2FA", user.id, f"Two-factor sign-in turned off for {user.email}")
+    db.commit()
+    db.refresh(user)
+    _notify(db, user, "Two-factor sign-in was reset",
+            "Support turned off two-factor sign-in on your account at your request. Turn it back on from Settings.", "account")
+    return user
+
+
 @router.post("/users/{user_id}/impersonate")
 def impersonate(user_id: str, request: Request, response: Response,
                 admin=Depends(get_current_admin), db: Session = Depends(get_db)):
@@ -319,7 +337,8 @@ def impersonate(user_id: str, request: Request, response: Response,
         raise HTTPException(status_code=400, detail="This account is closed.")
     admin_token, _ = _extract_token(request)
     set_cookie(response, ADMIN_COOKIE, admin_token, settings.ACCESS_TOKEN_EXPIRE_MINUTES, path="/api/auth")
-    set_cookie(response, SESSION_COOKIE, create_impersonation_token(user.email, admin.email), IMPERSONATION_MINUTES)
+    set_cookie(response, SESSION_COOKIE, create_impersonation_token(user.email, admin.email, user.session_version or 0),
+               IMPERSONATION_MINUTES)
     _audit(db, admin, "IMPERSONATE_START", user.id, f"Viewing as {user.email} (read-only, {IMPERSONATION_MINUTES} min)")
     db.commit()
     return {"redirect": "/app.html", "expires_in_minutes": IMPERSONATION_MINUTES}

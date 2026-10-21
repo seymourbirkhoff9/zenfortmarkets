@@ -3,6 +3,8 @@ import { $, $$, html, on, render } from './lib/dom.js';
 import { ago } from './lib/format.js';
 import { icon } from './lib/icons.js';
 import { avatar } from './lib/avatar.js';
+import { initTranslation, languageButton, wireLanguageButtons } from './lib/translate.js';
+import { mountAssistant } from './lib/assistant/widget.js';
 import { currentTheme, toggleTheme } from './lib/theme.js';
 import { openDialog, toastError } from './lib/ui.js';
 import { invalidate } from './lib/cache.js';
@@ -23,7 +25,7 @@ export function mountShell({ area, user, nav }) {
     ${user.impersonated_by ? html`
     <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 bg-pending px-4 py-2 text-center text-sm font-medium text-white" role="status">
       <span>Viewing as <strong>${user.full_name}</strong> (${user.email}). View only: nothing can be changed.</span>
-      <span id="imp-left" class="num opacity-90"></span>
+      <span id="imp-left" class="num opacity-90" aria-hidden="true"></span><span id="imp-left-sr" class="sr-only"></span>
       <button id="imp-exit" class="rounded bg-white/20 px-3 py-1 text-xs font-semibold hover:bg-white/30">Exit to console</button>
     </div>` : html`
     <p class="border-b border-line bg-sunken px-4 py-1.5 text-center text-xs text-muted">
@@ -55,6 +57,7 @@ export function mountShell({ area, user, nav }) {
         <header class="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-line bg-paper/90 px-4 backdrop-blur sm:px-6">
           <button id="menu-btn" class="rounded p-2 text-muted hover:bg-sunken lg:hidden" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false">${icon('menu')}</button>
           <div class="ml-auto flex items-center gap-1">
+            ${languageButton()}
             <button id="theme-btn" class="rounded p-2 text-muted hover:bg-sunken hover:text-ink" aria-label="Switch colour theme">
               ${icon(currentTheme() === 'dark' ? 'sun' : 'moon')}
             </button>
@@ -86,6 +89,10 @@ export function mountShell({ area, user, nav }) {
 
   wireChrome();
   wireProgress();
+  wireLanguageButtons(root);
+  initTranslation();
+  // Customers get the support assistant (not admins, and not while an admin is viewing as them).
+  if (!isAdmin && !user.impersonated_by) mountAssistant({ user });
   if (user.impersonated_by) wireImpersonation(user);
   else if (!user.terms_current) askForTerms();
   // Settings broadcasts profile changes (e.g. a new photo) so the header updates immediately.
@@ -185,14 +192,20 @@ function wireImpersonation(user) {
     try { const { redirect } = await api.auth.exitImpersonation(); invalidate(); location.href = redirect; }
     catch { location.href = '/admin.html'; }
   };
+  const srLeft = $('#imp-left-sr');
+  let lastMinute = null;
   const tick = () => {
     const ms = new Date(user.impersonation_expires_at).getTime() - Date.now();
-    if (ms <= 0) { exit(); return; }                       // session over: go back automatically
-    const m = Math.ceil(ms / 60000);
-    left.textContent = `Ends in ${m} min`;
+    if (ms <= 0) { clearInterval(timer); exit(); return; }       // session over: back to the console
+    const m = Math.floor(ms / 60000), sec = Math.floor((ms % 60000) / 1000);
+    left.textContent = `Ends in ${m}:${String(sec).padStart(2, '0')}`;
+    if (m !== lastMinute) {                                      // screen readers: once a minute, not every second
+      lastMinute = m;
+      srLeft.textContent = m ? `View-only session ends in ${m + 1} minutes.` : 'View-only session ends in under a minute.';
+    }
   };
+  const timer = setInterval(tick, 1000);
   tick();
-  setInterval(tick, 15_000);
   $('#imp-exit').addEventListener('click', exit);
 }
 

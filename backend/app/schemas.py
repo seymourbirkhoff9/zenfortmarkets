@@ -190,6 +190,7 @@ class UserOut(BaseModel):
     avatar_url: Optional[str] = None          # browser-ready URL (converted from the storage reference)
     terms_version: Optional[str] = None
     terms_accepted_at: Optional[datetime] = None
+    totp_enabled: bool = False
 
     @field_validator("avatar_url")
     @classmethod
@@ -419,6 +420,9 @@ class BroadcastLogResponse(BaseModel):
     subject: str
     target_filter: str
     recipient_count: int
+    delivered_count: Optional[int] = None
+    failed_count: Optional[int] = None
+    last_error: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -485,3 +485,167 @@ def test_branded_email_escapes_and_has_text_version():
     text = _h2t(html)
     assert "Hi <b>Eve</b>," in text and "Amount sent" in text and "$98.50" in text
     assert "Open your account (https://zenfortmarkets.com/app.html#/wallet)" in text and "<" not in text.replace("<b>", "").replace("</b>", "").replace("<script>", "")
+
+
+# ── Batch 5: errors, CORS, rate limits, password reset, 2FA, email delivery, support ──
+import re as _re
+import time as _time
+
+import pyotp as _pyotp
+
+from app.config import settings as _settings
+from app.services import mailer as _mailer, ratelimit as _rl
+
+
+def _login(client, email, password):
+    return client.post("/api/auth/login", json={"email": email, "password": password})
+
+
+def test_friendly_errors_and_cors(client):
+    r = client.get("/api/does-not-exist")
+    assert r.status_code == 404 and "couldn’t find" in r.json()["detail"] and r.json()["detail"] != "Not Found"
+    for origin, ok in [("http://localhost:3000", True), ("https://zenfortmarkets.vercel.app", True),
+                       ("https://zenfortmarkets-git-dev-me.vercel.app", True), ("https://zenfortmarkets.online", True),
+                       ("https://www.zenfortmarkets.online", True), ("https://evil.example", False),
+                       ("https://zenfortmarkets.vercel.app.evil.com", False)]:
+        pre = client.options("/api/auth/login", headers={"Origin": origin, "Access-Control-Request-Method": "POST",
+                                                         "Access-Control-Request-Headers": "content-type,x-requested-with"})
+        assert (pre.headers.get("access-control-allow-origin") == origin) is ok, origin
+        if ok:
+            assert pre.headers.get("access-control-allow-credentials") == "true"
+
+
+def test_login_is_rate_limited(client, make_user):
+    u = make_user()
+    for _ in range(9):
+        assert _login(client, u["email"], "wrong-password").status_code == 401
+    assert _login(client, u["email"], "User-pass-1").status_code == 200          # success clears the failures
+    for _ in range(10):
+        assert _login(client, u["email"], "wrong-password").status_code == 401
+    r = _login(client, u["email"], "User-pass-1")
+    assert r.status_code == 429 and "Too many" in r.json()["detail"]             # 10 failures → locked, even with the right password
+    _rl._hits.clear()
+
+
+def test_password_reset_flow(client, make_user, monkeypatch):
+    monkeypatch.setattr(_settings, "DEV_OUTBOX", True)
+    _rl._hits.clear(); _mailer.OUTBOX.clear()
+    u = make_user()
+    unknown = client.post("/api/auth/forgot-password", json={"email": "nobody-here@test.dev"})
+    known = client.post("/api/auth/forgot-password", json={"email": u["email"]})
+    assert unknown.status_code == known.status_code == 202 and unknown.json() == known.json()   # no enumeration
+    mail = [m for m in _mailer.OUTBOX if m["to"] == u["email"]][-1]
+    token = _re.search(r"reset-password\.html\?token=([\w.-]+)", mail["html"]).group(1)
+
+    assert client.post("/api/auth/reset-password", json={"token": token, "new_password": "short"}).status_code == 422
+    ok = client.post("/api/auth/reset-password", json={"token": token, "new_password": "Brand-new-pass-9"})
+    assert ok.status_code == 200
+    assert client.get("/api/auth/me", headers=u["h"]).status_code == 401            # old session signed out
+    assert client.post("/api/auth/reset-password", json={"token": token, "new_password": "Another-pass-9"}).status_code == 400  # one use
+    assert _login(client, u["email"], "User-pass-1").status_code == 401
+    assert _login(client, u["email"], "Brand-new-pass-9").status_code == 200
+    assert any(m["to"] == u["email"] and "was reset" in m["subject"] for m in _mailer.OUTBOX)
+
+
+def test_change_password_signs_out_other_sessions(client, make_user):
+    u = make_user()
+    other_device = u["h"]
+    r = client.post("/api/auth/change-password", headers=other_device,
+                    json={"current_password": "User-pass-1", "new_password": "Changed-pass-9"})
+    assert r.status_code == 204 and "zf_session" in r.cookies                       # this device gets a fresh session
+    assert client.get("/api/auth/me", headers=other_device).status_code == 401
+    assert client.get("/api/auth/me", headers={"Authorization": "Bearer " + r.cookies["zf_session"]}).status_code == 200
+
+
+def test_two_factor_full_lifecycle(client, admin, make_user):
+    _rl._hits.clear()
+    u = make_user()
+    assert client.post("/api/auth/2fa/setup", headers=u["h"], json={"password": "nope"}).status_code == 400
+    setup = client.post("/api/auth/2fa/setup", headers=u["h"], json={"password": "User-pass-1"}).json()
+    totp = _pyotp.TOTP(setup["secret"])
+    assert setup["otpauth_uri"].startswith("otpauth://totp/Zenfort%20Markets:")
+    assert client.post("/api/auth/2fa/enable", headers=u["h"], json={"code": "000000"}).status_code == 400
+    en = client.post("/api/auth/2fa/enable", headers=u["h"], json={"code": totp.now()})
+    codes = en.json()["recovery_codes"]
+    assert en.status_code == 200 and len(codes) == 8 and _re.fullmatch(r"[A-Z2-9]{4}-[A-Z2-9]{4}", codes[0])
+    assert client.get("/api/auth/me", headers=u["h"]).status_code == 401              # older sessions ended
+    me = client.get("/api/auth/me", headers={"Authorization": "Bearer " + en.cookies["zf_session"]}).json()
+    assert me["totp_enabled"] is True
+
+    step1 = _login(client, u["email"], "User-pass-1").json()
+    assert step1["two_factor_required"] is True and "access_token" not in step1
+    assert client.post("/api/auth/login/2fa", json={"challenge": step1["challenge"], "code": "123456"}).status_code == 400
+    # A code from the next 30 s window (allowed clock drift) that hasn't been used yet
+    code = totp.at(_time.time() + 30)
+    ok = client.post("/api/auth/login/2fa", json={"challenge": step1["challenge"], "code": code})
+    assert ok.status_code == 200 and ok.json()["access_token"]
+    replay = client.post("/api/auth/login/2fa", json={"challenge": _login(client, u["email"], "User-pass-1").json()["challenge"], "code": code})
+    assert replay.status_code == 400                                                  # same code can't be reused
+
+    ch = _login(client, u["email"], "User-pass-1").json()["challenge"]
+    rec = client.post("/api/auth/login/2fa", json={"challenge": ch, "code": codes[0].lower()})
+    assert rec.status_code == 200
+    ch = _login(client, u["email"], "User-pass-1").json()["challenge"]
+    assert client.post("/api/auth/login/2fa", json={"challenge": ch, "code": codes[0]}).status_code == 400   # one use only
+    h = {"Authorization": "Bearer " + rec.json()["access_token"]}
+    assert client.get("/api/auth/2fa", headers=h).json()["recovery_codes_left"] == 7
+
+    reset = client.post(f"/api/admin/users/{u['id']}/reset-2fa", headers=admin)
+    assert reset.status_code == 200 and reset.json()["totp_enabled"] is False
+    assert client.get("/api/auth/me", headers=h).status_code == 401                   # signed out by the reset
+    assert "access_token" in _login(client, u["email"], "User-pass-1").json()          # password-only again
+    assert any(l["action"] == "RESET_2FA" for l in client.get("/api/admin/audit-logs", headers=admin).json()[:3])
+    _rl._hits.clear()
+
+
+def test_admin_email_reports_delivery(client, admin, make_user, monkeypatch):
+    u = make_user()
+    ok = client.post("/api/admin/emails/send-user", headers=admin, json={"user_id": u["id"], "subject": "Hi", "body": "Hello there"}).json()
+    assert ok["email_sent"] is True and ok["in_app"] is True
+    monkeypatch.setattr(_mailer, "send", lambda *a, **k: _mailer.Result(False, "403: You can only send testing emails to your own email address"))
+    bad = client.post("/api/admin/emails/send-user", headers=admin, json={"user_id": u["id"], "subject": "Hi", "body": "Hello again"}).json()
+    assert bad["email_sent"] is False and "own email" in bad["email_error"]
+    titles = [n["title"] for n in client.get("/api/notifications/", headers=u["h"]).json()]
+    assert titles.count("Message from support") == 2                                  # in-app copy always lands
+
+
+def test_mailer_speaks_resend_api(monkeypatch):
+    import httpx
+    seen = {}
+
+    def handler(req):
+        seen["url"], seen["auth"], seen["body"] = str(req.url), req.headers["authorization"], json.loads(req.content)
+        if seen["body"]["to"] == ["blocked@x.dev"]:
+            return httpx.Response(403, json={"statusCode": 403, "name": "validation_error",
+                                             "message": "You can only send testing emails to your own email address"})
+        return httpx.Response(200, json={"id": "abc"})
+
+    import json
+    monkeypatch.setattr(_settings, "RESEND_API_KEY", "re_live_123")
+    monkeypatch.setattr(_settings, "EMAIL_REPLY_TO", "support@zenfortmarkets.online")
+    monkeypatch.setattr(_mailer, "_client", httpx.Client(transport=httpx.MockTransport(handler)))
+    r = _mailer.send("a@x.dev", "Subject", "<p>Hello <b>you</b></p>")
+    assert r.ok and seen["url"] == "https://api.resend.com/emails" and seen["auth"] == "Bearer re_live_123"
+    assert seen["body"]["reply_to"] == "support@zenfortmarkets.online" and seen["body"]["text"] and seen["body"]["html"]
+    bad = _mailer.send("blocked@x.dev", "Subject", "<p>x</p>")
+    assert not bad.ok and bad.reason.startswith("403") and "Verify your sending domain" in bad.reason
+
+
+def test_support_requests(client, make_user, monkeypatch):
+    monkeypatch.setattr(_settings, "DEV_OUTBOX", True)
+    _rl._hits.clear(); _mailer.OUTBOX.clear()
+    body = {"name": "Ada", "email": "ada@test.dev", "message": "My deposit has been pending for two days",
+            "transcript": [{"who": "you", "text": "where is my deposit"}, {"who": "assistant", "text": "Deposits are reviewed…"}],
+            "page": "/app.html#/wallet"}
+    r = client.post("/api/support/requests", json=body)
+    assert r.status_code == 201 and r.json()["reference"].startswith("ZF-")
+    mail = _mailer.OUTBOX[-1]
+    assert mail["to"] == _settings.SUPPORT_EMAIL and "where is my deposit" in mail["text"] and "pending for two days" in mail["text"]
+    assert client.post("/api/support/requests", json={**body, "message": "hi"}).status_code == 422
+    n = len(_mailer.OUTBOX)
+    assert client.post("/api/support/requests", json={**body, "website": "http://spam"}).status_code == 201
+    assert len(_mailer.OUTBOX) == n                                                   # honeypot: silently dropped
+    assert client.post("/api/support/requests", json=body).status_code == 201
+    assert client.post("/api/support/requests", json=body).status_code == 201
+    assert client.post("/api/support/requests", json=body).status_code == 429         # 3 per email per hour
+    _rl._hits.clear()

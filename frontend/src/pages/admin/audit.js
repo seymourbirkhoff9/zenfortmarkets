@@ -11,7 +11,7 @@ const ACTION = {
   BLOCK_USER: 'Restricted a customer', UNBLOCK_USER: 'Lifted a restriction', UPDATE_USER_FLAGS: 'Changed account permissions',
   CREATE_PLAN: 'Created a plan', UPDATE_PLAN: 'Edited a plan', DELETE_PLAN: 'Deleted a plan', RUN_ROI: 'Ran return accrual',
   IMPERSONATE_START: 'Viewed an account as the customer', IMPERSONATE_END: 'Stopped viewing as the customer',
-  PROMOTE_ADMIN: 'Gave admin access', DEMOTE_ADMIN: 'Removed admin access',
+  PROMOTE_ADMIN: 'Gave admin access', DEMOTE_ADMIN: 'Removed admin access', RESET_2FA: 'Reset two-factor sign-in',
   CREATE_PAYMENT_METHOD: 'Added a payment method', UPDATE_PAYMENT_METHOD: 'Edited a payment method', DELETE_PAYMENT_METHOD: 'Removed a payment method',
 };
 const PAGE = 100;

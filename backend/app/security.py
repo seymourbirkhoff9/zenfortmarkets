@@ -43,12 +43,12 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 # ── Tokens ────────────────────────────────────
-def create_access_token(subject: str, expires_delta: Optional[timedelta] = None) -> str:
-    """Session token. `subject` is the user's email (kept for compatibility)."""
+def create_access_token(subject: str, expires_delta: Optional[timedelta] = None, session_version: int = 0) -> str:
+    """Session token. `subject` is the user's email; `sv` must match users.session_version."""
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    return jwt.encode({"sub": subject, "exp": expire, "typ": "access"},
+    return jwt.encode({"sub": subject, "exp": expire, "typ": "access", "sv": session_version},
                       settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
@@ -89,10 +89,11 @@ def decode_access_payload(token: str) -> dict:
     return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
 
 
-def create_impersonation_token(customer_email: str, admin_email: str) -> str:
+def create_impersonation_token(customer_email: str, admin_email: str, session_version: int = 0) -> str:
     """A short-lived session for `customer_email`, marked with the admin who opened it."""
     expire = datetime.now(timezone.utc) + timedelta(minutes=IMPERSONATION_MINUTES)
-    return jwt.encode({"sub": customer_email, "exp": expire, "typ": "access", "imp": admin_email},
+    return jwt.encode({"sub": customer_email, "exp": expire, "typ": "access", "imp": admin_email,
+                       "sv": session_version},
                       settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
@@ -151,6 +152,9 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account not found.")
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is deactivated.")
+    # Password reset/change or 2FA changes bump session_version, which signs out older sessions.
+    if payload.get("sv", 0) != (user.session_version or 0):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your session has ended. Sign in again.")
     user.impersonated_by = impersonator      # not a column: read by UserOut so the UI can show the banner
     if impersonator:
         user.impersonation_expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)

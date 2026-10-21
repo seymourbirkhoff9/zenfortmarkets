@@ -54,6 +54,23 @@ class Settings(BaseSettings):
     LOCAL_UPLOAD_DIR: str = "uploads"
     SIGNED_URL_SECONDS: int = 300
 
+    # ── Cross-origin access (CORS) ──
+    # Browsers normally reach the API through the same address as the site (Vercel rewrite or Vite proxy),
+    # so CORS only matters for direct calls. Comma-separated exact origins, plus a pattern for Vercel previews.
+    ALLOWED_ORIGINS: str = ("http://localhost:3000,http://127.0.0.1:3000,"
+                            "https://zenfortmarkets.vercel.app,"
+                            "https://zenfortmarkets.online,https://www.zenfortmarkets.online")
+    CORS_ORIGIN_REGEX: str = r"https://zenfortmarkets(-[a-z0-9-]+)?\.vercel\.app"
+
+    # ── Email ──
+    # EMAIL_FROM: a no-reply address on a domain verified in Resend (until then, onboarding@resend.dev,
+    # which Resend only delivers to your own Resend account address).
+    # EMAIL_REPLY_TO / SUPPORT_EMAIL: where customer replies and support requests go.
+    EMAIL_REPLY_TO: str = ""
+    SUPPORT_EMAIL: str = "support@zenfortmarkets.online"
+    # Development only: keep sent emails in memory and expose them at /api/dev/outbox (never in production).
+    DEV_OUTBOX: bool = False
+
     # Bump when Terms/Privacy change; users are asked to accept the new version on their next visit.
     TERMS_VERSION: str = "2026-10"
 
