@@ -234,10 +234,12 @@ class PaymentMethod(Base):
     __tablename__ = "payment_methods"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    asset = Column(String(20), nullable=False)          # "USDT", "BTC", "ETH"
-    network = Column(String(50), nullable=False)        # "TRC20", "Bitcoin", "ERC20"
+    method_type = Column(String(10), nullable=False, default="crypto")  # "crypto" | "bank"
+    asset = Column(String(20), nullable=False)          # "USDT", "BTC", "BANK"
+    network = Column(String(50), nullable=False)        # "TRC20", "Bitcoin", bank name
     deposit_address = Column(String(255), nullable=True)
     deposit_memo = Column(String(255), nullable=True)   # tag/memo some chains require
+    bank_details = Column(Text, nullable=True)          # JSON: bank-specific fields for bank transfers
     deposit_enabled = Column(Boolean, nullable=False, default=True)
     withdraw_enabled = Column(Boolean, nullable=False, default=True)
     min_deposit = Column(Numeric(precision=20, scale=8), nullable=False, default=Decimal("0"))
@@ -245,3 +247,4 @@ class PaymentMethod(Base):
     withdrawal_fee = Column(Numeric(precision=20, scale=8), nullable=False, default=Decimal("0"))  # flat, in USD
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
