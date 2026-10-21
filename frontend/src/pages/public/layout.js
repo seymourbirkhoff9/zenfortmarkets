@@ -2,6 +2,7 @@ import '../../styles.css';
 import { html, raw, render } from '../../lib/dom.js';
 import { SITE } from '../../site.js';
 import { api } from '../../lib/api.js';
+import { themeButton, wireThemeButton } from '../../lib/theme.js';
 
 const NAV = [
   ['How it works', '/how-it-works.html'], ['Fees & limits', '/fees.html'], ['Security', '/security.html'],
@@ -34,7 +35,8 @@ export const header = () => html`
       ${NAV.map(([l, u]) => html`<a class="text-muted hover:text-ink ${location.pathname === u ? 'font-semibold text-ink' : ''}" href="${u}"
         ${location.pathname === u ? html`aria-current="page"` : ''}>${l}</a>`)}
     </nav>
-    <div class="flex items-center gap-2" id="auth-links">
+    <div class="flex items-center gap-1 sm:gap-2" id="auth-links">
+      ${themeButton()}
       <span id="auth-cta" class="hidden items-center gap-2 sm:flex"><a class="btn-quiet" href="/login.html">Sign in</a>
       <a class="btn-primary" href="/signup.html">Create account</a></span>
       <button id="pub-menu" class="rounded p-2 text-muted hover:bg-sunken lg:hidden" aria-expanded="false" aria-controls="pub-nav" aria-label="Menu">
@@ -52,6 +54,7 @@ export const demoStrip = () => html`<p class="border-b border-line bg-sunken px-
 
 /** Wire the header menu, the “Go to your account” link for signed-in visitors, and scroll reveals. */
 export function enhance() {
+  wireThemeButton();
   // Signed-in visitors get a direct way back in instead of "Sign in / Create account".
   api.auth.me({ quiet401: true }).then((u) => {
     const link = html`<a class="btn-primary" href="${u.is_admin ? '/admin.html' : '/app.html'}">${u.is_admin ? 'Open the console' : 'Go to your account'}</a>`;

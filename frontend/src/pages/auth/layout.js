@@ -1,5 +1,6 @@
 import '../../styles.css';
 import { html, render } from '../../lib/dom.js';
+import { themeButton, wireThemeButton } from '../../lib/theme.js';
 
 /** Two-column auth layout: form on the left, a short factual note on the right. */
 export function authLayout({ title, intro, form, aside }) {
@@ -9,9 +10,12 @@ export function authLayout({ title, intro, form, aside }) {
     </p>
     <div class="grid min-h-[calc(100vh-29px)] lg:grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)]">
       <main class="flex flex-col px-6 py-8 sm:px-12">
-        <a href="/" class="flex items-center gap-2.5 font-semibold">
-          <span class="grid h-8 w-8 place-items-center rounded bg-navy font-serif text-lg text-navy-fg">Z</span>Zenfort Markets
-        </a>
+        <div class="flex items-center justify-between">
+          <a href="/" class="flex items-center gap-2.5 font-semibold">
+            <span class="grid h-8 w-8 place-items-center rounded bg-navy font-serif text-lg text-navy-fg">Z</span>Zenfort Markets
+          </a>
+          ${themeButton()}
+        </div>
         <div class="my-auto w-full max-w-sm py-10">
           <h1 class="font-serif text-3xl">${title}</h1>
           ${intro ? html`<p class="mt-2 text-muted">${intro}</p>` : ''}
@@ -24,6 +28,7 @@ export function authLayout({ title, intro, form, aside }) {
       </main>
       <aside class="hidden border-l border-line bg-surface lg:flex lg:items-center lg:px-14">${aside}</aside>
     </div>`);
+  wireThemeButton();
 }
 
 /** What happens to money here, step by step — the honest version. */
