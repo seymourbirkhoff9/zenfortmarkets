@@ -318,9 +318,43 @@ with sync_playwright() as p:
     M.goto(f"{BASE}/app.html#/")
     M.click("#menu-btn"); expect(M.locator("#sidebar")).not_to_have_class(re.compile("-translate-x-full")); M.screenshot(path="shots/mobile-menu.png")
     step("mobile layout and drawer work")
+    M.goto(f"{BASE}/"); M.click("#pub-menu"); expect(M.locator("#pub-nav")).to_be_visible()
+    expect(M.locator("#pub-nav").get_by_role("link", name="Fees & limits")).to_be_visible()
+    M.screenshot(path="shots/mobile-home.png", full_page=True)
+    M.goto(f"{BASE}/app.html"); M.wait_for_selector("#splash", state="detached", timeout=8000)
+    step("[B4] public menu on a phone; branded splash clears once the app is ready")
+    overflow = []
+    for u in ["/", "/how-it-works.html", "/fees.html", "/security.html", "/faq.html", "/about.html", "/contact.html",
+              "/terms.html", "/privacy.html", "/risk.html", "/app.html#/", "/app.html#/wallet", "/app.html#/invest",
+              "/app.html#/activity", "/app.html#/referrals", "/app.html#/settings"]:
+        M.goto(BASE + u); M.wait_for_timeout(700)
+        w = M.evaluate("document.documentElement.scrollWidth")
+        if w > 390: overflow.append((u, w))
+    assert not overflow, f"pages wider than the phone: {overflow}"
+    step("[B4] 16 public and customer pages fit a 390 px phone with no sideways scrolling")
 
-    A.goto(f"{BASE}/"); expect(A.get_by_role("link", name="Go to the console")).to_be_visible()
-    A.screenshot(path="shots/landing.png", full_page=True)
+    # ── Batch 4 ──────────────────────────────────────────────────────
+    A.goto(f"{BASE}/")
+    expect(A.get_by_role("link", name="Open the console")).to_be_visible()             # signed-in admin
+    expect(A.locator("#st-balance")).to_have_text("$1,248.40", timeout=6000)          # animation settles the deposit
+    expect(A.locator('[data-row="dep"]')).to_contain_text("Confirmed by an operator")
+    expect(A.locator("#network-list")).to_contain_text("USDT")
+    expect(A.locator("#network-list")).to_contain_text("on TRC20")
+    expect(A.locator("#plan-list")).to_contain_text("Starter 30")
+    A.wait_for_timeout(1200); A.screenshot(path="shots/landing.png", full_page=True)
+    step("[B4] homepage: statement animation settles the deposit ($998.40 → $1,248.40); live networks and plans shown")
+
+    A.goto(f"{BASE}/fees.html")
+    expect(A.locator("#methods")).to_contain_text("TRC20"); expect(A.locator("#methods")).to_contain_text("$1.50")
+    expect(A.locator("#plan-table")).to_contain_text("Starter 30"); expect(A.locator("#plan-table")).to_contain_text("24%")
+    assert "deposit_address" not in A.content() and "TXyz9k2LmN4pQ8rS6tU1vW3xY5zA7bC9dE" not in A.content()
+    for path, h1 in [("/how-it-works.html", "How it works"), ("/security.html", "Security"), ("/faq.html", "Frequently asked questions"),
+                     ("/about.html", "About Zenfort Markets"), ("/contact.html", "Contact")]:
+        A.goto(BASE + path); expect(A.get_by_role("heading", name=h1, level=1)).to_be_visible()
+        expect(A.get_by_role("navigation", name="Legal")).to_be_visible()
+    A.goto(f"{BASE}/faq.html"); A.get_by_text("Why do I need to verify my identity?").click()
+    expect(A.get_by_text("an identity check is required before the first one")).to_be_visible()
+    step("[B4] fees page shows live networks (no deposit address leaked) and plan totals; all public pages render")
     b.close()
 
 print("\nProblems:", *(problems or ["none"]), sep="\n  ")

@@ -17,9 +17,36 @@
       document.documentElement.dataset.theme = t;
     })();
   </script>
+  <style>
+    /* Branded splash: inline so it shows before any script or stylesheet loads. */
+    #splash { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: #F5F7F9; color: #14243B;
+              font-family: "IBM Plex Sans", system-ui, sans-serif; transition: opacity .35s ease; }
+    [data-theme="dark"] #splash { background: #0D1623; color: #E7ECF2; }
+    #splash.done { opacity: 0; pointer-events: none; }
+    #splash .box { display: grid; justify-items: center; gap: 14px; text-align: center; padding: 24px; }
+    #splash .mark { position: relative; width: 64px; height: 64px; display: grid; place-items: center; }
+    #splash .z { width: 44px; height: 44px; border-radius: 9px; background: #14243B; color: #fff; display: grid; place-items: center;
+                 font: 600 26px/1 "IBM Plex Serif", Georgia, serif; }
+    [data-theme="dark"] #splash .z { background: #D6A84E; color: #0D1623; }
+    #splash svg { position: absolute; inset: 0; animation: zf-spin 1.4s linear infinite; }
+    #splash circle { fill: none; stroke: #A8781F; stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 60 140; }
+    #splash .name { font: 600 17px/1.2 "IBM Plex Sans", system-ui, sans-serif; margin-top: 4px; }
+    #splash .what { font-size: 13px; opacity: .65; }
+    #splash .line { font: italic 14px/1.4 "IBM Plex Serif", Georgia, serif; opacity: .8; max-width: 22rem; }
+    @keyframes zf-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { #splash svg { animation: none; } #splash { transition: none; } }
+  </style>
 </head>
 <body>
-  <div id="root"><p class="p-8 text-muted">Loading your account…</p></div>
+    <div id="splash" role="status" aria-live="polite">
+    <div class="box">
+      <div class="mark"><svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="30"/></svg><div class="z">Z</div></div>
+      <div class="name">Zenfort Markets</div>
+      <div class="line">Every move reviewed. Every dollar recorded.</div>
+      <div class="what">Opening your account…</div>
+    </div>
+  </div>
+  <div id="root"></div>
   <script type="module" src="/src/app.js"></script>
 </body>
 </html>

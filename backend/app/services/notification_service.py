@@ -1,4 +1,3 @@
-from __future__ import annotations
 """
 app/services/notification_service.py — Notification & Email Service
 
@@ -7,6 +6,8 @@ Email failures are logged but never crash the primary transaction.
 """
 import logging
 from concurrent.futures import ThreadPoolExecutor
+
+from app.services.email_templates import html_to_text
 from sqlalchemy.orm import Session
 from app.models import User, Notification
 from app.services.email import resend, settings, logger as email_logger
@@ -20,7 +21,8 @@ _email_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="email")
 
 def _deliver(to: str, subject: str, html: str) -> None:
     try:
-        resend.Emails.send({"from": settings.EMAIL_FROM, "to": [to], "subject": subject, "html": html})
+        resend.Emails.send({"from": settings.EMAIL_FROM, "to": [to], "subject": subject,
+                            "html": html, "text": html_to_text(html)})
         logger.info("Email sent → %s: %s", to, subject)
     except Exception as e:  # never propagate
         logger.error("Failed to send email to %s: %s", to, e, exc_info=True)

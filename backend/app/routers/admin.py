@@ -35,6 +35,7 @@ from app.services.email_templates import render_email, usd
 from app.services.ledger import credit, debit, lock_wallet, lock_wallet_by_id, money
 from app.services.notification_service import send_notification_and_email
 from app.services.referral_service import process_referral_milestone
+from app.routers.public import clear_public_cache
 from app.services import storage
 from app.services.parallel import run_parallel
 from app.services.roi import run_roi_accrual
@@ -50,11 +51,19 @@ def _audit(db: Session, admin: User, action: str, target_user_id=None, details: 
     db.add(AuditLog(admin_id=admin.id, action=action, target_user_id=target_user_id, details=details))
 
 
-def _notify(db: Session, user: User, title: str, message: str, kind: str, extra: list[str] | None = None):
+# Where each kind of notification sends the reader in the app.
+_CTA = {"deposit": "#/wallet", "withdrawal": "#/wallet?tab=withdrawal", "kyc": "#/settings", "account": "#/"}
+
+
+def _notify(db: Session, user: User, title: str, message: str, kind: str,
+            extra: list[str] | None = None, rows: list[tuple[str, str]] | None = None):
+    """In-app notification + branded email. `rows` become the email's details table."""
+    link = f"{settings.FRONTEND_URL.rstrip('/')}/app.html{_CTA.get(kind, '#/')}"
     send_notification_and_email(
         db=db, user=user, title=title, message=message, notification_type=kind,
         email_subject=f"{title} — Zenfort Markets",
-        email_html=render_email(title, user.full_name, [message, *(extra or [])]),
+        email_html=render_email(title, user.full_name, [message, *(extra or [])], rows=rows,
+                                cta=("Open your account", link)),
     )
 
 
@@ -343,7 +352,7 @@ def credit_user_wallet(payload: AdminCreditRequest, admin=Depends(get_current_ad
     db.commit()
     db.refresh(tx)
     _notify(db, user, "Wallet credited", f"{usd(amount)} was added to your {payload.wallet_type.title()} wallet.",
-            "deposit", [note])
+            "deposit", rows=[("Amount", usd(amount)), ("Wallet", payload.wallet_type.title()), ("Note", note)])
     return admin_tx_view(tx, user)
 
 
@@ -365,7 +374,7 @@ def debit_user_wallet(payload: AdminDebitRequest, admin=Depends(get_current_admi
     db.commit()
     db.refresh(tx)
     _notify(db, user, "Wallet debited", f"{usd(amount)} was deducted from your {payload.wallet_type.title()} wallet.",
-            "account", [note])
+            "account", rows=[("Amount", usd(amount)), ("Wallet", payload.wallet_type.title()), ("Note", note)])
     return admin_tx_view(tx, user)
 
 
@@ -451,11 +460,13 @@ def review_deposit(transaction_id: str, payload: AdminDepositReviewRequest,
     if tx.status == "completed":
         process_referral_milestone(db, user, "first_deposit", tx.amount)
         _notify(db, user, "Deposit approved",
-                f"Your {usd(tx.amount)} deposit via {tx.gateway_name} is now in your Main wallet.", "deposit")
+                f"Your {usd(tx.amount)} deposit via {tx.gateway_name} is now in your Main wallet.", "deposit",
+                rows=[("Amount", usd(tx.amount)), ("Method", tx.gateway_name or "—"),
+                      *([("Transaction hash", tx.tx_hash)] if tx.tx_hash else [])])
     else:
         _notify(db, user, "Deposit rejected",
                 f"Your {usd(tx.amount)} deposit via {tx.gateway_name} was not approved.", "deposit",
-                [f"Reason: {tx.rejection_reason}"])
+                rows=[("Amount", usd(tx.amount)), ("Method", tx.gateway_name or "—"), ("Reason", tx.rejection_reason)])
     return admin_tx_view(tx, user)
 
 
@@ -490,11 +501,13 @@ def review_withdrawal(transaction_id: str, payload: AdminWithdrawalReviewRequest
     if tx.status == "completed":
         _notify(db, user, "Withdrawal sent",
                 f"We sent {usd(payout)} worth of {tx.asset} on {tx.network} to your address.", "withdrawal",
-                [f"Payout reference: {tx.payout_tx_hash}"])
+                rows=[("Amount sent", usd(payout)), ("Network fee", usd(tx.fee or 0)),
+                      ("Asset", f"{tx.asset} on {tx.network}"), ("To address", tx.withdrawal_address or "—"),
+                      ("Payout reference", tx.payout_tx_hash)])
     else:
         _notify(db, user, "Withdrawal rejected",
                 f"Your {usd(tx.amount)} withdrawal was not processed and the funds are back in your Main wallet.",
-                "withdrawal", [f"Reason: {tx.rejection_reason}"])
+                "withdrawal", rows=[("Amount returned", usd(tx.amount)), ("Reason", tx.rejection_reason)])
     return admin_tx_view(tx, user)
 
 
@@ -534,8 +547,8 @@ def review_kyc(user_id: str, payload: AdminKYCReviewRequest,
         _notify(db, user, "Identity verified", "Your identity check passed. Withdrawals are now available.", "kyc")
     else:
         _notify(db, user, "Identity check needs another look",
-                "We couldn't verify the document you sent.", "kyc",
-                [f"What to fix: {user.kyc_rejection_reason}", "You can upload a new document from Settings."])
+                "We couldn't verify the document you sent. You can upload a new one from Settings.", "kyc",
+                rows=[("What to fix", user.kyc_rejection_reason)])
     return user
 
 
@@ -549,6 +562,7 @@ def create_investment_plan(payload: InvestmentPlanCreate, admin=Depends(get_curr
     db.add(plan)
     _audit(db, admin, "CREATE_PLAN", None, f"{payload.name}: {payload.daily_roi_percent}%/day × {payload.duration_days}d")
     db.commit()
+    clear_public_cache()
     db.refresh(plan)
     return plan
 
@@ -575,6 +589,7 @@ def update_investment_plan(plan_id: str, payload: InvestmentPlanUpdate,
         setattr(plan, k, v.strip() if isinstance(v, str) else v)
     _audit(db, admin, "UPDATE_PLAN", None, f"{plan.name}: {', '.join(f'{k}={v}' for k, v in data.items())}")
     db.commit()
+    clear_public_cache()
     db.refresh(plan)
     return plan
 
@@ -589,6 +604,7 @@ def delete_investment_plan(plan_id: str, admin=Depends(get_current_admin), db: S
     _audit(db, admin, "DELETE_PLAN", None, plan.name)
     db.delete(plan)
     db.commit()
+    clear_public_cache()
     return Response(status_code=204)
 
 
@@ -631,6 +647,7 @@ def create_method(payload: PaymentMethodCreate, admin=Depends(get_current_admin)
     db.add(m)
     _audit(db, admin, "CREATE_PAYMENT_METHOD", None, f"{m.asset} ({m.network})")
     db.commit()
+    clear_public_cache()
     db.refresh(m)
     return m
 
@@ -649,6 +666,7 @@ def update_method(method_id: str, payload: PaymentMethodUpdate,
     _audit(db, admin, "UPDATE_PAYMENT_METHOD", None,
            f"{m.asset} ({m.network}): " + ", ".join(f"{k}={v}" for k, v in data.items()))
     db.commit()
+    clear_public_cache()
     db.refresh(m)
     return m
 
@@ -663,6 +681,7 @@ def delete_method(method_id: str, admin=Depends(get_current_admin), db: Session 
     _audit(db, admin, "DELETE_PAYMENT_METHOD", None, f"{m.asset} ({m.network})")
     db.delete(m)
     db.commit()
+    clear_public_cache()
     return Response(status_code=204)
 
 

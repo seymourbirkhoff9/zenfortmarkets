@@ -1,27 +1,92 @@
 import '../../styles.css';
 import { html, raw, render } from '../../lib/dom.js';
 import { SITE } from '../../site.js';
+import { api } from '../../lib/api.js';
+
+const NAV = [
+  ['How it works', '/how-it-works.html'], ['Fees & limits', '/fees.html'], ['Security', '/security.html'],
+  ['FAQ', '/faq.html'], ['About', '/about.html'],
+];
 
 export const footer = () => html`
-  <footer class="border-t border-line">
-    <div class="mx-auto flex max-w-6xl flex-col gap-4 px-6 py-8 text-sm text-muted sm:flex-row sm:items-center sm:justify-between">
-      <p>${SITE.name} is an educational demo. Do not send real funds.</p>
-      <nav aria-label="Legal" class="flex flex-wrap gap-x-5 gap-y-2">
-        <a class="hover:text-ink hover:underline" href="/terms.html">Terms of Service</a>
-        <a class="hover:text-ink hover:underline" href="/privacy.html">Privacy Policy</a>
-        <a class="hover:text-ink hover:underline" href="/risk.html">Risk Disclosure</a>
-        <a class="hover:text-ink hover:underline" href="mailto:${SITE.contactEmail}">Contact</a>
-      </nav>
+  <footer class="border-t border-line bg-surface">
+    <div class="mx-auto grid max-w-6xl gap-10 px-6 py-12 sm:grid-cols-2 lg:grid-cols-[1.4fr_1fr_1fr_1fr]">
+      <div>
+        <a href="/" class="flex items-center gap-2.5 font-semibold">
+          <span class="grid h-8 w-8 place-items-center rounded bg-navy font-serif text-lg text-navy-fg">Z</span>${SITE.name}</a>
+        <p class="mt-3 max-w-xs text-sm text-muted">A brokerage back office you can study end to end. Educational demo: do not send real funds.</p>
+      </div>
+      ${[
+        ['Product', [['How it works', '/how-it-works.html'], ['Fees & limits', '/fees.html'], ['Supported networks', '/fees.html#networks'], ['Security', '/security.html']]],
+        ['Company', [['About', '/about.html'], ['FAQ', '/faq.html'], ['Contact', '/contact.html']]],
+        ['Legal', [['Terms of Service', '/terms.html'], ['Privacy Policy', '/privacy.html'], ['Risk Disclosure', '/risk.html']]],
+      ].map(([h, links]) => html`<nav aria-label="${h}"><p class="text-sm font-semibold">${h}</p>
+        <ul class="mt-3 grid gap-2 text-sm text-muted">${links.map(([l, u]) => html`<li><a class="hover:text-ink hover:underline" href="${u}">${l}</a></li>`)}</ul></nav>`)}
     </div>
+    <p class="border-t border-line px-6 py-5 text-center text-xs text-muted">© ${new Date().getFullYear()} ${SITE.name}. Balances shown are simulated. Nothing here is investment advice.</p>
   </footer>`;
 
 export const header = () => html`
-  <header class="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
-    <a href="/" class="flex items-center gap-2.5 font-semibold">
+  <header class="relative z-30 mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-5">
+    <a href="/" class="flex shrink-0 items-center gap-2.5 font-semibold">
       <span class="grid h-8 w-8 place-items-center rounded bg-navy font-serif text-lg text-navy-fg">Z</span>${SITE.name}</a>
-    <nav class="flex items-center gap-2"><a class="btn-quiet" href="/login.html">Sign in</a>
-      <a class="btn-primary" href="/signup.html">Create account</a></nav>
+    <nav aria-label="Main" class="hidden items-center gap-6 text-sm lg:flex">
+      ${NAV.map(([l, u]) => html`<a class="text-muted hover:text-ink ${location.pathname === u ? 'font-semibold text-ink' : ''}" href="${u}"
+        ${location.pathname === u ? html`aria-current="page"` : ''}>${l}</a>`)}
+    </nav>
+    <div class="flex items-center gap-2" id="auth-links">
+      <span id="auth-cta" class="hidden items-center gap-2 sm:flex"><a class="btn-quiet" href="/login.html">Sign in</a>
+      <a class="btn-primary" href="/signup.html">Create account</a></span>
+      <button id="pub-menu" class="rounded p-2 text-muted hover:bg-sunken lg:hidden" aria-expanded="false" aria-controls="pub-nav" aria-label="Menu">
+        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    </div>
+    <nav id="pub-nav" aria-label="Main" class="panel absolute inset-x-4 top-[4.5rem] grid gap-1 p-2 shadow-xl lg:hidden" hidden>
+      ${NAV.map(([l, u]) => html`<a class="nav-link" href="${u}">${l}</a>`)}
+      <div id="auth-cta-mobile" class="mt-1 grid gap-2 border-t border-line p-2 pt-3 sm:hidden">
+        <a class="btn-primary" href="/signup.html">Create account</a><a class="btn-quiet" href="/login.html">Sign in</a></div>
+    </nav>
   </header>`;
+
+export const demoStrip = () => html`<p class="border-b border-line bg-sunken px-4 py-1.5 text-center text-xs text-muted">
+  Educational demo. Balances are simulated, no real funds are held, and nothing here is investment advice.</p>`;
+
+/** Wire the header menu, the “Go to your account” link for signed-in visitors, and scroll reveals. */
+export function enhance() {
+  // Signed-in visitors get a direct way back in instead of "Sign in / Create account".
+  api.auth.me({ quiet401: true }).then((u) => {
+    const link = html`<a class="btn-primary" href="${u.is_admin ? '/admin.html' : '/app.html'}">${u.is_admin ? 'Open the console' : 'Go to your account'}</a>`;
+    render('#auth-cta', link);
+    render('#auth-cta-mobile', link);
+  }).catch(() => {});
+  const btn = document.getElementById('pub-menu'), nav = document.getElementById('pub-nav');
+  btn?.addEventListener('click', () => { nav.hidden = !nav.hidden; btn.setAttribute('aria-expanded', String(!nav.hidden)); });
+  // Elements marked data-reveal fade up as they scroll into view (instantly with reduced motion).
+  const els = document.querySelectorAll('[data-reveal]');
+  if (!('IntersectionObserver' in window) || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    els.forEach((el) => el.classList.add('is-visible')); return;
+  }
+  const io = new IntersectionObserver((entries) => entries.forEach((en) => {
+    if (en.isIntersecting) { en.target.classList.add('is-visible'); io.unobserve(en.target); }
+  }), { rootMargin: '0px 0px -8% 0px' });
+  els.forEach((el) => io.observe(el));
+}
+
+/** A simple content page: header, title, body sections, footer. */
+export function contentPage({ title, intro, body }) {
+  document.title = `${title} — ${SITE.name}`;
+  render('#root', html`${demoStrip()}${header()}
+    <main>
+      <section class="ledger-bg border-b border-line">
+        <div class="mx-auto max-w-6xl px-6 pb-14 pt-10">
+          <h1 class="max-w-3xl font-serif text-4xl leading-tight sm:text-5xl">${title}</h1>
+          <p class="mt-4 max-w-2xl text-lg text-muted">${intro}</p>
+        </div>
+      </section>
+      <div class="mx-auto max-w-6xl px-6 py-14">${body}</div>
+    </main>
+    ${footer()}`);
+  enhance();
+}
 
 /**
  * A legal document page. `sections` is [[heading, [paragraph, …]], …]; paragraphs are plain text,
@@ -30,9 +95,7 @@ export const header = () => html`
 export function legalPage({ title, intro, sections }) {
   document.title = `${title} — ${SITE.name}`;
   render('#root', html`
-    <p class="border-b border-line bg-sunken px-4 py-1.5 text-center text-xs text-muted">
-      Educational demo. Balances are simulated, no real funds are held, and nothing here is investment advice.
-    </p>
+    ${demoStrip()}
     ${header()}
     <main class="mx-auto max-w-3xl px-6 pb-20 pt-6">
       <p class="text-sm text-muted">Last updated ${SITE.termsUpdated} (version ${SITE.termsVersion})</p>
@@ -51,6 +114,7 @@ export function legalPage({ title, intro, sections }) {
         </section>`)}
     </main>
     ${footer()}`);
+  enhance();
 }
 
 export { raw, SITE };

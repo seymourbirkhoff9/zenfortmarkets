@@ -458,3 +458,30 @@ def test_supabase_backend_speaks_the_storage_api():
     absolute = _Supa("https://proj.supabase.co", "k", client=_httpx.Client(transport=_httpx.MockTransport(
         lambda r: _httpx.Response(200, json={"signedURL": "https://proj.supabase.co/storage/v1/object/sign/b/p?token=Z"}))))
     assert absolute.signed_url("b", "p", 60) == "https://proj.supabase.co/storage/v1/object/sign/b/p?token=Z"
+
+
+# ── Batch 4: public data, branded emails ──
+from app.services.email_templates import html_to_text as _h2t, render_email as _render
+
+
+def test_public_endpoints_are_safe_and_fresh(client, admin, method):
+    methods = client.get("/api/public/payment-methods")              # no sign-in needed
+    assert methods.status_code == 200 and methods.headers["cache-control"].startswith("public")
+    m = next(x for x in methods.json() if x["network"] == method["network"])
+    assert "deposit_address" not in m and "id" not in m and m["asset"] == "USDT"
+    name = f"Public plan {_uuid.uuid4().hex[:5]}"
+    client.get("/api/public/plans")                                   # warm the cache
+    client.post("/api/admin/plans/", headers=admin, json={"name": name, "min_amount": "10", "max_amount": "99",
+                "daily_roi_percent": "0.5", "duration_days": 7})
+    assert any(p["name"] == name for p in client.get("/api/public/plans").json())   # admin change visible at once
+
+
+def test_branded_email_escapes_and_has_text_version():
+    html = _render("Withdrawal sent", "<b>Eve</b>", ["We sent $98.50 worth of USDT."],
+                   cta=("Open your account", "https://zenfortmarkets.com/app.html#/wallet"),
+                   rows=[("Amount sent", "$98.50"), ("To address", "TQn9<script>")])
+    assert "<b>Eve</b>" not in html and "&lt;b&gt;Eve&lt;/b&gt;" in html and "<script>" not in html
+    assert "Amount sent" in html and "Open your account" in html and "/terms.html" in html
+    text = _h2t(html)
+    assert "Hi <b>Eve</b>," in text and "Amount sent" in text and "$98.50" in text
+    assert "Open your account (https://zenfortmarkets.com/app.html#/wallet)" in text and "<" not in text.replace("<b>", "").replace("</b>", "").replace("<script>", "")

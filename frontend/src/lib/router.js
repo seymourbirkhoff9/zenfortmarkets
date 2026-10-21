@@ -4,6 +4,14 @@
  *   async (outlet, params, query) => cleanup?
  * Its returned cleanup runs before the next route renders (clear timers etc.).
  */
+/** Fade out the branded splash from app.html/admin.html after the first screen is ready. */
+function hideSplash() {
+  const el = document.getElementById('splash');
+  if (!el || el.classList.contains('done')) return;
+  el.classList.add('done');
+  setTimeout(() => el.remove(), 400);
+}
+
 export function createRouter(routes, { onRoute } = {}) {
   const table = Object.entries(routes).map(([pattern, view]) => {
     if (pattern === '*') return { pattern, rx: /^$^/, keys: [], view };   // fallback, never matched directly
@@ -43,6 +51,7 @@ export function createRouter(routes, { onRoute } = {}) {
         '<p class="mt-1 text-sm text-muted">Check your connection, then reload the page.</p></div>';
     }
     if (mine === token) cleanup = result;   // ignore views that finished after navigation
+    hideSplash();
   }
 
   window.addEventListener('hashchange', resolve);
