@@ -134,8 +134,8 @@ if settings.DEV_OUTBOX:
         return list(reversed(_mailer.OUTBOX))
 
 
-@app.get("/health", tags=["Health"])
-@app.get("/api/health", tags=["Health"], include_in_schema=False)
+@app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])
+@app.api_route("/api/health", methods=["GET", "HEAD"], tags=["Health"], include_in_schema=False)
 def health_check():
     return {"status": "ok", "service": "zenfort-markets-api"}
 
