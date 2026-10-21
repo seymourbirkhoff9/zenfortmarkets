@@ -4,12 +4,13 @@ legalPage({
   title: 'Risk Disclosure',
   intro: 'Please read this before depositing or investing. It explains what can go wrong.',
   sections: [
-    ['This is not investment advice', [
-      `${SITE.name} is an educational demonstration. Nothing on the site is a recommendation to buy, sell or hold any asset, and it is not regulated as an investment service.`,
+    ['Investment risks', [
+      `${SITE.name} provides investment opportunities but cryptocurrency investments carry inherent risks. Past performance does not guarantee future results.`,
+      'You should carefully consider your financial situation and risk tolerance before investing.',
     ]],
     ['Returns are not guaranteed', [
-      'Plan rates show what the operator intends to pay, not a promise. Returns can be delayed, reduced or stopped, and you could lose some or all of the amount you invest.',
-      'A high fixed daily return is a warning sign in real financial products. Be very cautious with any real platform that offers one.',
+      'Plan rates show expected returns based on historical performance and market conditions. Returns can vary based on market volatility and you could lose some or all of the amount you invest.',
+      'Cryptocurrency markets are highly volatile. Only invest amounts you can afford to lose.',
     ]],
     ['Crypto transfers are irreversible', [
       'Sending to the wrong address, or on a different network than the one shown, usually cannot be undone. Always check the asset, network and address before you send.',

@@ -30,5 +30,5 @@ contentPage({
       'An operator sends the payout and records the transaction hash, which you can check yourself. If it’s rejected, the full amount returns to Main.'])}
   </ol>
   <div class="mt-6 flex flex-wrap gap-3" data-reveal>
-    <a class="btn-primary" href="/signup.html">Open a demo account</a><a class="btn-quiet" href="/fees.html">Fees and limits</a></div>`,
+    <a class="btn-primary" href="/signup.html">Create account</a><a class="btn-quiet" href="/fees.html">Fees and limits</a></div>`,
 });

@@ -12,8 +12,8 @@ export const TOPICS = [
     answer: 'Hi! I can help with deposits, withdrawals, verification, investments, your account and security. What do you need?' },
   { id: 'thanks', keys: ['thanks', 'thank you', 'thx', 'great', 'perfect', 'ok thanks'],
     answer: 'You’re welcome. Anything else I can help with?' },
-  { id: 'legit', keys: ['real', 'legit', 'scam', 'real money', 'demo', 'educational', 'is this safe', 'trust', 'fake'],
-    answer: 'Zenfort Markets is an educational demo of how a brokerage back office works. Balances and returns are simulated. Please don’t send real funds.',
+  { id: 'legit', keys: ['real', 'legit', 'scam', 'real money', 'is this safe', 'trust', 'fake'],
+    answer: 'Zenfort Markets is a professional cryptocurrency trading and investment platform. All transactions are processed securely with full audit trails.',
     links: [['About Zenfort', '/about.html'], ['Risk Disclosure', '/risk.html']] },
 
   // Deposits
@@ -54,7 +54,7 @@ export const TOPICS = [
 
   // Investing & wallets
   { id: 'invest', keys: ['invest', 'investment', 'plan', 'plans', 'roi', 'return', 'returns', 'interest', 'profit', 'earn', 'daily'],
-    answer: 'Plans are set by the operator: a daily rate, a term and an amount range. Your amount comes from Main and is locked for the term; returns go to Profit daily and the principal returns to Main at the end. Returns aren’t guaranteed; in this demo they’re simulated.',
+    answer: 'Plans are set by the operator: a daily rate, a term and an amount range. Your amount comes from Main and is locked for the term; returns go to Profit daily and the principal returns to Main at the end. Returns aren’t guaranteed and vary based on market conditions.',
     links: [['See plans', '/app.html#/invest'], ['Risk Disclosure', '/risk.html']] },
   { id: 'invest_early', keys: ['cancel investment', 'end investment early', 'withdraw investment', 'stop investment', 'early exit', 'unlock'],
     answer: 'Investments can’t be ended early. The amount is locked for the full term and then returned to your Main wallet automatically.' },

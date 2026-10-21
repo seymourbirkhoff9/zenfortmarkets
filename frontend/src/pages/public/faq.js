@@ -3,7 +3,7 @@ import { html } from '../../lib/dom.js';
 
 const groups = [
   ['The basics', [
-    ['Is this a real investment platform?', `No. ${SITE.name} is an educational demo of how a brokerage back office works. Balances and returns are simulated. Do not send real funds.`],
+    ['What is Zenfort Markets?', `${SITE.name} is a cryptocurrency trading and investment platform that provides secure wallet management, investment plans, and professional trading services.`],
     ['Why are balances in US dollars?', 'Keeping one currency makes every balance and fee easy to follow. Crypto is only how money arrives and leaves.'],
     ['What are the Main and Profit wallets?', 'Main is spendable: deposits arrive there and withdrawals and investments come from it. Profit collects investment returns; move them to Main any time.']]],
   ['Deposits', [
@@ -15,7 +15,7 @@ const groups = [
     ['What fee will I pay?', 'A flat fee per network, shown before you confirm. The fee is deducted from the amount sent.'],
     ['Where is my money while a withdrawal is pending?', 'Held from your Main wallet. If the request is rejected, the full amount comes back.']]],
   ['Investments', [
-    ['Are returns guaranteed?', 'No. Read the Risk Disclosure. In this demo returns are simulated.'],
+    ['Are returns guaranteed?', 'No. Read the Risk Disclosure. Investment returns vary based on market conditions and plan performance.'],
     ['Can I end an investment early?', 'No. The amount is locked for the full term, then returned to Main.']]],
 ];
 

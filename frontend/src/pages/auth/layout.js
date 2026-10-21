@@ -3,14 +3,13 @@ import { html, render } from '../../lib/dom.js';
 import { themeButton, wireThemeButton } from '../../lib/theme.js';
 import { initTranslation, languageButton, wireLanguageButtons } from '../../lib/translate.js';
 import { mountAssistant } from '../../lib/assistant/widget.js';
+import { cryptoTicker } from '../public/layout.js';
 
 /** Two-column auth layout: form on the left, a short factual note on the right. */
 export function authLayout({ title, intro, form, aside }) {
   render('#root', html`
-    <p class="border-b border-line bg-sunken px-4 py-1.5 text-center text-xs text-muted">
-      Demo environment. Balances are simulated and nothing here is investment advice.
-    </p>
-    <div class="grid min-h-[calc(100vh-29px)] lg:grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)]">
+    ${cryptoTicker()}
+    <div class="grid min-h-[calc(100vh-41px)] lg:grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)]">
       <main class="flex flex-col px-6 py-8 sm:px-12">
         <div class="flex items-center justify-between">
           <a href="/" class="flex items-center gap-2.5 font-semibold">
@@ -39,7 +38,7 @@ export function authLayout({ title, intro, form, aside }) {
 /** What happens to money here, step by step — the honest version. */
 export const processAside = html`
   <div class="max-w-md">
-    <p class="text-sm font-semibold text-muted">How money moves in this demo</p>
+    <p class="text-sm font-semibold text-muted">How money moves on the platform</p>
     <ol class="mt-6 grid gap-6">
       ${[
         ['You send crypto to an address the operator publishes', 'Pick an asset and network, then report the USD value and transaction hash.'],

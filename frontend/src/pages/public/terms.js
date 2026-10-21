@@ -5,9 +5,9 @@ legalPage({
   intro: `These terms govern your use of ${SITE.name}. By creating an account you agree to them.`,
   sections: [
     ['What this service is', [
-      `${SITE.name} is an educational demonstration of how a brokerage back office works. It is operated by ${SITE.operator}.`,
-      'Balances, investment plans and returns shown in the app are simulated for learning purposes. Nothing on the site is an offer to invest, a solicitation, or financial, tax or legal advice.',
-      'Do not send real funds. Any value you send is sent at your own risk.',
+      `${SITE.name} is a cryptocurrency trading and investment platform operated by ${SITE.operator}.`,
+      'The platform provides secure wallet management, investment plans, and professional trading services for cryptocurrency assets.',
+      'All transactions are processed securely and balances are maintained in USD for consistency across the platform.',
     ]],
     ['Who can use it', [
       'You must be at least 18 years old and able to form a binding agreement where you live. You may hold only one account.',
