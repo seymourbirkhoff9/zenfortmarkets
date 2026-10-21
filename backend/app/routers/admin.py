@@ -1,914 +1,697 @@
 """
-app/routers/admin.py — Admin-only management endpoints
-"""
-from datetime import datetime, timezone
-from decimal import Decimal
-from typing import Any, Dict, List
-import uuid
+app/routers/admin.py — admin operations console API.
 
-from fastapi import APIRouter, Depends, HTTPException, status
+Every state change that touches money or a user's standing:
+  * runs inside one DB transaction with the affected wallet rows locked,
+  * records who reviewed it and when,
+  * writes an AuditLog row in the same transaction,
+  * notifies the user in-app (and by email, in the background).
+"""
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from pydantic import ValidationError
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
-from app.models import User, Wallet, Transaction, KYCStatus, InvestmentPlan, UserInvestment, AuditLog
-from app.schemas import (
-    UserOut, AdminCreditRequest, AdminDebitRequest, AdminUserStatusUpdate,
-    AdminKYCReviewRequest, TransactionOut, AdminDepositReviewRequest,
-    AdminWithdrawalReviewRequest,
-    InvestmentPlanCreate, InvestmentPlanUpdate, InvestmentPlanResponse,
-    AuditLogResponse,
+from app.models import (
+    AuditLog, InvestmentPlan, KYCStatus, PaymentMethod, Transaction, User, UserInvestment, Wallet,
 )
+from app.schemas import (
+    AdminCreditRequest, AdminDebitRequest, AdminDepositReviewRequest, AdminKYCReviewRequest,
+    AdminStats, AdminTransactionOut, AdminUserDetail, AdminUserStatusUpdate,
+    AdminWithdrawalReviewRequest, AuditLogResponse, InvestmentPlanCreate, InvestmentPlanResponse,
+    InvestmentPlanUpdate, PaymentMethodCreate, PaymentMethodOut, PaymentMethodUpdate, RoleUpdate, UserOut, UserPage,
+)
+from app.security import (
+    ADMIN_COOKIE, IMPERSONATION_MINUTES, SESSION_COOKIE, _extract_token, create_impersonation_token,
+    get_current_admin, set_cookie,
+)
+from app.services.email_templates import render_email, usd
+from app.services.ledger import credit, debit, lock_wallet, lock_wallet_by_id, money
 from app.services.notification_service import send_notification_and_email
 from app.services.referral_service import process_referral_milestone
-from app.security import get_current_admin
+from app.routers.public import clear_public_cache
+from app.services import storage
+from app.services.parallel import run_parallel
+from app.services.roi import run_roi_accrual
+from app.services.serializers import admin_tx_view, tx_view
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
+CUR = settings.BASE_CURRENCY
 
 
-def _create_audit_log(
-    db: Session,
-    admin_id: str,
-    action: str,
-    target_user_id: str = None,
-    details: str = None,
-):
-    """Helper function to create an audit log entry."""
-    audit_log = AuditLog(
-        admin_id=admin_id,
-        action=action,
-        target_user_id=target_user_id,
-        details=details,
+# ── helpers ───────────────────────────────────
+def _audit(db: Session, admin: User, action: str, target_user_id=None, details: str = "") -> None:
+    """Queue an audit row. The caller's commit makes it atomic with the change it describes."""
+    db.add(AuditLog(admin_id=admin.id, action=action, target_user_id=target_user_id, details=details))
+
+
+# Where each kind of notification sends the reader in the app.
+_CTA = {"deposit": "#/wallet", "withdrawal": "#/wallet?tab=withdrawal", "kyc": "#/settings", "account": "#/"}
+
+
+def _notify(db: Session, user: User, title: str, message: str, kind: str,
+            extra: list[str] | None = None, rows: list[tuple[str, str]] | None = None):
+    """In-app notification + branded email. `rows` become the email's details table."""
+    link = f"{settings.FRONTEND_URL.rstrip('/')}/app.html{_CTA.get(kind, '#/')}"
+    send_notification_and_email(
+        db=db, user=user, title=title, message=message, notification_type=kind,
+        email_subject=f"{title} — Zenfort Markets",
+        email_html=render_email(title, user.full_name, [message, *(extra or [])], rows=rows,
+                                cta=("Open your account", link)),
     )
-    db.add(audit_log)
-    db.commit()
 
 
-# ──────────────────────────────────────────────
-# GET /api/admin/users — List all users
-# ──────────────────────────────────────────────
-@router.get("/users", response_model=List[UserOut])
-def list_users(
-    skip: int = 0,
-    limit: int = 50,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    return db.query(User).offset(skip).limit(limit).all()
-
-
-# ──────────────────────────────────────────────
-# PATCH /api/admin/users/{user_id}/activate
-# ──────────────────────────────────────────────
-@router.patch("/users/{user_id}/activate", response_model=UserOut)
-def activate_user(
-    user_id: str,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    user = db.query(User).filter(User.id == user_id).first()
+def _get_user(db: Session, user_id=None, email: Optional[str] = None) -> User:
+    q = db.query(User)
+    user = q.filter(User.id == user_id).first() if user_id else q.filter(User.email == (email or "").lower()).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
-    user.is_active = True
-    db.commit()
-    db.refresh(user)
     return user
 
 
-# ──────────────────────────────────────────────
-# PATCH /api/admin/users/{user_id}/deactivate
-# ──────────────────────────────────────────────
-@router.patch("/users/{user_id}/deactivate", response_model=UserOut)
-def deactivate_user(
-    user_id: str,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
-    user.is_active = False
-    db.commit()
-    db.refresh(user)
-    return user
+def _owner_of(db: Session, tx: Transaction) -> Optional[User]:
+    wallet_id = tx.receiver_wallet_id if tx.tx_type in ("deposit", "admin_credit", "roi_credit",
+                                                         "principal_return", "referral_bonus") \
+        else tx.sender_wallet_id or tx.receiver_wallet_id
+    if not wallet_id:
+        return None
+    return db.query(User).join(Wallet, Wallet.user_id == User.id).filter(Wallet.id == wallet_id).first()
 
 
-# ──────────────────────────────────────────────
-# PATCH /api/admin/users/{user_id}/status — Update compliance flags
-# ──────────────────────────────────────────────
-@router.patch("/users/{user_id}/status", response_model=UserOut)
-def update_user_status(
-    user_id: str,
-    payload: AdminUserStatusUpdate,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Update user compliance and governance flags (is_blocked, can_withdraw, can_deposit, is_active)."""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
-
-    # Track changes for notifications
-    was_blocked = user.is_blocked
-    could_withdraw = user.can_withdraw
-    could_deposit = user.can_deposit
-
-    # Update only provided fields
-    if payload.is_blocked is not None:
-        user.is_blocked = payload.is_blocked
-    if payload.can_withdraw is not None:
-        user.can_withdraw = payload.can_withdraw
-    if payload.can_deposit is not None:
-        user.can_deposit = payload.can_deposit
-    if payload.is_active is not None:
-        user.is_active = payload.is_active
-
-    db.commit()
-    db.refresh(user)
-
-    # Audit log for block/unblock
-    if payload.is_blocked is not None and user.is_blocked != was_blocked:
-        action = "BLOCK_USER" if user.is_blocked else "UNBLOCK_USER"
-        _create_audit_log(
-            db=db,
-            admin_id=admin.id,
-            action=action,
-            target_user_id=user_id,
-            details=f"User account {'blocked' if user.is_blocked else 'unblocked'}",
-        )
-
-    # Send notifications for status changes
-    if payload.is_blocked is not None and user.is_blocked != was_blocked:
-        if user.is_blocked:
-            send_notification_and_email(
-                db=db,
-                user=user,
-                title="Account Blocked",
-                message="Your account has been blocked. Please contact support for assistance.",
-                notification_type="account",
-                email_subject="Account Blocked - Zenfort Markets",
-                email_html=f"""
-                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
-                  <h2 style="color:#1a1a3e;">Account Blocked</h2>
-                  <p>Hi {user.full_name},</p>
-                  <p>Your account has been blocked.</p>
-                  <p>Please contact support if you have any questions or believe this is an error.</p>
-                  <hr/>
-                  <small style="color:#888;">Zenfort Markets</small>
-                </div>
-                """,
-            )
-        else:
-            send_notification_and_email(
-                db=db,
-                user=user,
-                title="Account Unblocked",
-                message="Your account has been unblocked. You can now access all platform features.",
-                notification_type="account",
-                email_subject="Account Unblocked - Zenfort Markets",
-                email_html=f"""
-                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
-                  <h2 style="color:#1a1a3e;">Account Unblocked</h2>
-                  <p>Hi {user.full_name},</p>
-                  <p>Your account has been unblocked.</p>
-                  <p>You can now access all platform features.</p>
-                  <hr/>
-                  <small style="color:#888;">Zenfort Markets</small>
-                </div>
-                """,
-            )
-
-    if payload.can_withdraw is not None and user.can_withdraw != could_withdraw and not user.can_withdraw:
-        send_notification_and_email(
-            db=db,
-            user=user,
-            title="Withdrawals Disabled",
-            message="Your withdrawal privileges have been temporarily disabled. Please contact support for assistance.",
-            notification_type="account",
-            email_subject="Withdrawals Disabled - Zenfort Markets",
-            email_html=f"""
-            <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
-              <h2 style="color:#1a1a3e;">Withdrawals Disabled</h2>
-              <p>Hi {user.full_name},</p>
-              <p>Your withdrawal privileges have been temporarily disabled.</p>
-              <p>Please contact support if you have any questions.</p>
-              <hr/>
-              <small style="color:#888;">Zenfort Markets</small>
-            </div>
-            """,
-        )
-
-    if payload.can_deposit is not None and user.can_deposit != could_deposit and not user.can_deposit:
-        send_notification_and_email(
-            db=db,
-            user=user,
-            title="Deposits Disabled",
-            message="Your deposit privileges have been temporarily disabled. Please contact support for assistance.",
-            notification_type="account",
-            email_subject="Deposits Disabled - Zenfort Markets",
-            email_html=f"""
-            <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
-              <h2 style="color:#1a1a3e;">Deposits Disabled</h2>
-              <p>Hi {user.full_name},</p>
-              <p>Your deposit privileges have been temporarily disabled.</p>
-              <p>Please contact support if you have any questions.</p>
-              <hr/>
-              <small style="color:#888;">Zenfort Markets</small>
-            </div>
-            """,
-        )
-
-    return user
+def _with_owners(db: Session, txs: list[Transaction]) -> list[dict]:
+    wallet_ids = {w for t in txs for w in (t.sender_wallet_id, t.receiver_wallet_id) if w}
+    owners = dict(db.query(Wallet.id, User).join(User, User.id == Wallet.user_id)
+                  .filter(Wallet.id.in_(wallet_ids)).all()) if wallet_ids else {}
+    out = []
+    for t in txs:
+        primary = t.sender_wallet_id if t.tx_type in ("withdrawal", "admin_debit", "investment", "p2p") \
+            else (t.receiver_wallet_id or t.sender_wallet_id)
+        out.append(admin_tx_view(t, owners.get(primary)))
+    return out
 
 
-# ──────────────────────────────────────────────
-# POST /api/admin/credit — Credit a user's wallet
-# ──────────────────────────────────────────────
-@router.post("/credit", response_model=TransactionOut, status_code=status.HTTP_201_CREATED)
-def credit_user_wallet(
-    payload: AdminCreditRequest,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Admin can credit any user's main or profit wallet (e.g. for deposits)."""
-    user = db.query(User).filter(User.email == payload.user_email).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
-
-    wallet = (
-        db.query(Wallet)
-        .filter(Wallet.user_id == user.id, Wallet.wallet_type == payload.wallet_type)
-        .first()
-    )
-    if not wallet:
-        raise HTTPException(status_code=404, detail="Wallet not found.")
-
-    wallet.balance += payload.amount
-
-    tx = Transaction(
-        receiver_wallet_id=wallet.id,
-        amount=payload.amount,
-        currency=wallet.currency,
-        tx_type="deposit",
-        description=payload.description or f"Admin credit to {payload.wallet_type} wallet",
-        status="completed",
-    )
-    db.add(tx)
-    db.commit()
-    db.refresh(tx)
-
-    # Audit log
-    _create_audit_log(
-        db=db,
-        admin_id=admin.id,
-        action="CREDIT_WALLET",
-        target_user_id=str(user.id),
-        details=f"Credited {payload.amount} {wallet.currency} to {payload.wallet_type} wallet",
-    )
-
-    return tx
+def _revalidate(model, data: dict) -> None:
+    """Validate the merged result of a partial update; surface failures as 422, not 500."""
+    try:
+        model(**data)
+    except ValidationError as e:
+        msg = "; ".join(err["msg"].removeprefix("Value error, ") for err in e.errors())
+        raise HTTPException(status_code=422, detail=msg)
 
 
-# ──────────────────────────────────────────────
-# GET /api/admin/transactions — All platform transactions
-# ──────────────────────────────────────────────
-@router.get("/transactions", response_model=List[TransactionOut])
-def list_all_transactions(
-    skip: int = 0,
-    limit: int = 100,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    return (
-        db.query(Transaction)
-        .order_by(Transaction.created_at.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
+def _parse_status(value: str) -> str:
+    return "completed" if value in ("approved", "completed") else value
+
+
+# ── Overview ──────────────────────────────────
+def _stats_parts(now: datetime):
+    """Four aggregate queries (instead of ~12) that can run in parallel."""
+    since7, since30 = now - timedelta(days=7), now - timedelta(days=30)
+    T, U = Transaction, User
+    pend, done30 = (T.status == "pending"), (T.status == "completed") & (T.created_at >= since30)
+    is_dep, is_wd = (T.tx_type == "deposit"), (T.tx_type == "withdrawal")
+
+    def tx_agg(db):
+        return db.query(
+            func.count().filter(is_dep & pend), func.coalesce(func.sum(T.amount).filter(is_dep & pend), 0),
+            func.min(T.created_at).filter(is_dep & pend),
+            func.count().filter(is_wd & pend), func.coalesce(func.sum(T.amount).filter(is_wd & pend), 0),
+            func.min(T.created_at).filter(is_wd & pend),
+            func.coalesce(func.sum(T.amount).filter(is_dep & done30), 0),
+            func.coalesce(func.sum(T.amount).filter(is_wd & done30), 0),
+        ).filter(T.tx_type.in_(("deposit", "withdrawal"))).one()
+
+    def user_agg(db):
+        cust = U.is_admin.is_(False)
+        kyc = U.kyc_status == KYCStatus.PENDING
+        return db.query(
+            func.count().filter(cust), func.count().filter(cust & (U.created_at >= since7)),
+            func.count().filter(cust & U.is_blocked.is_(True)), func.count().filter(kyc),
+            func.min(func.coalesce(U.updated_at, U.created_at)).filter(kyc),
+        ).one()
+
+    def wallet_agg(db):
+        return db.query(
+            func.coalesce(func.sum(Wallet.balance).filter(Wallet.wallet_type == "main"), 0),
+            func.coalesce(func.sum(Wallet.balance).filter(Wallet.wallet_type == "profit"), 0),
+        ).join(User, User.id == Wallet.user_id).filter(User.is_admin.is_(False)).one()
+
+    def inv_agg(db):
+        return db.query(func.count(UserInvestment.id), func.coalesce(func.sum(UserInvestment.amount_invested), 0)) \
+            .filter(UserInvestment.status == "active").one()
+
+    return tx_agg, user_agg, wallet_agg, inv_agg
+
+
+def _compose_stats(tx, us, wa, inv) -> dict:
+    return dict(
+        users_total=us[0], users_new_7d=us[1], users_blocked=us[2], pending_kyc=us[3],
+        pending_deposits=tx[0], pending_deposits_amount=tx[1],
+        pending_withdrawals=tx[3], pending_withdrawals_amount=tx[4],
+        deposits_completed_30d=tx[6], withdrawals_completed_30d=tx[7],
+        total_main_balance=wa[0], total_profit_balance=wa[1],
+        active_investments=inv[0], active_investment_capital=inv[1],
     )
 
 
-# ──────────────────────────────────────────────
-# POST /api/admin/wallets/debit — Debit a user's wallet
-# ──────────────────────────────────────────────
-@router.post("/wallets/debit", response_model=TransactionOut, status_code=status.HTTP_201_CREATED)
-def debit_user_wallet(
-    payload: AdminDebitRequest,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Admin can debit any user's main or profit wallet (e.g., for withdrawals or penalties)."""
-    user = db.query(User).filter(User.email == payload.user_email).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
-
-    wallet = (
-        db.query(Wallet)
-        .filter(Wallet.user_id == user.id, Wallet.wallet_type == payload.wallet_type)
-        .first()
-    )
-    if not wallet:
-        raise HTTPException(status_code=404, detail="Wallet not found.")
-
-    if wallet.balance < payload.amount:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Insufficient balance in wallet.",
-        )
-
-    wallet.balance -= payload.amount
-
-    tx = Transaction(
-        sender_wallet_id=wallet.id,
-        amount=payload.amount,
-        currency=wallet.currency,
-        tx_type="admin_debit",
-        description=payload.description or f"Admin debit from {payload.wallet_type} wallet",
-        status="completed",
-    )
-    db.add(tx)
-    db.commit()
-    db.refresh(tx)
-
-    # Audit log
-    _create_audit_log(
-        db=db,
-        admin_id=admin.id,
-        action="DEBIT_WALLET",
-        target_user_id=str(user.id),
-        details=f"Debited {payload.amount} {wallet.currency} from {payload.wallet_type} wallet",
-    )
-
-    return tx
-
-
-# ──────────────────────────────────────────────
-# PATCH /api/admin/kyc/{user_id}/review — Review KYC
-# ──────────────────────────────────────────────
-@router.patch("/kyc/{user_id}/review", response_model=UserOut)
-def review_kyc(
-    user_id: str,
-    payload: AdminKYCReviewRequest,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Review and approve/reject a user's KYC verification."""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
-
-    # Update KYC status
-    user.kyc_status = payload.status
-
-    # Set is_verified based on approval/rejection
-    if payload.status.value == "VERIFIED":
-        user.is_verified = True
-    elif payload.status.value == "REJECTED":
-        user.is_verified = False
-
-    # Store rejection reason if provided
-    if payload.rejection_reason:
-        # For now, we could store this in kyc_document_url or add a new field
-        # Storing it in kyc_document_url temporarily as a workaround
-        user.kyc_document_url = f"REJECTED: {payload.rejection_reason}"
-
-    db.commit()
-    db.refresh(user)
-
-    # Audit log
-    _create_audit_log(
-        db=db,
-        admin_id=admin.id,
-        action="REVIEW_KYC",
-        target_user_id=user_id,
-        details=f"KYC review: {payload.status.value}" + (f" - {payload.rejection_reason}" if payload.rejection_reason else ""),
-    )
-
-    # Send notification and email
-    if payload.status.value == "VERIFIED":
-        send_notification_and_email(
-            db=db,
-            user=user,
-            title="KYC Verification Approved",
-            message="Your KYC verification has been approved. You can now access all platform features.",
-            notification_type="kyc",
-            email_subject="KYC Verification Approved - Zenfort Markets",
-            email_html=f"""
-            <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
-              <h2 style="color:#1a1a3e;">KYC Verification Approved</h2>
-              <p>Hi {user.full_name},</p>
-              <p>Your KYC verification has been successfully approved.</p>
-              <p>You can now access all platform features including deposits, withdrawals, and investments.</p>
-              <hr/>
-              <small style="color:#888;">Zenfort Markets</small>
-            </div>
-            """,
-        )
-    elif payload.status.value == "REJECTED":
-        reason = payload.rejection_reason or "Please resubmit your documents."
-        send_notification_and_email(
-            db=db,
-            user=user,
-            title="KYC Verification Rejected",
-            message=f"Your KYC verification was rejected. Reason: {reason}",
-            notification_type="kyc",
-            email_subject="KYC Verification Rejected - Zenfort Markets",
-            email_html=f"""
-            <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
-              <h2 style="color:#1a1a3e;">KYC Verification Rejected</h2>
-              <p>Hi {user.full_name},</p>
-              <p>Your KYC verification was rejected.</p>
-              <p><strong>Reason:</strong> {reason}</p>
-              <p>Please review the requirements and resubmit your documents.</p>
-              <hr/>
-              <small style="color:#888;">Zenfort Markets</small>
-            </div>
-            """,
-        )
-
-    return user
-
-
-# ──────────────────────────────────────────────
-# GET /api/admin/deposits/pending — List pending deposits
-# ──────────────────────────────────────────────
-@router.get("/deposits/pending", response_model=List[TransactionOut])
-def list_pending_deposits(
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Return all pending deposit transactions ordered by created_at descending."""
-    return (
-        db.query(Transaction)
-        .filter(Transaction.tx_type == "deposit", Transaction.status == "pending")
-        .order_by(Transaction.created_at.desc())
-        .all()
-    )
-
-
-# ──────────────────────────────────────────────
-# PATCH /api/admin/deposits/{transaction_id}/review — Review deposit
-# ──────────────────────────────────────────────
-@router.patch("/deposits/{transaction_id}/review", response_model=TransactionOut)
-def review_deposit(
-    transaction_id: str,
-    payload: AdminDepositReviewRequest,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """
-    Review and approve/reject a pending deposit transaction.
-
-    If approved: Update transaction to "completed" and credit user's main wallet.
-    If rejected: Update transaction to "rejected" with rejection reason.
-    """
-    # Fetch the pending transaction
-    tx = db.query(Transaction).filter(Transaction.id == transaction_id).first()
-    if not tx:
-        raise HTTPException(status_code=404, detail="Transaction not found.")
-    if tx.tx_type != "deposit":
-        raise HTTPException(status_code=400, detail="Transaction is not a deposit.")
-    if tx.status != "pending":
-        raise HTTPException(status_code=400, detail=f"Transaction is not pending. Current status: {tx.status}")
-
-    # Process based on review status
-    if payload.status in ["approved", "completed"]:
-        # Get the wallet to credit
-        wallet = db.query(Wallet).filter(Wallet.id == tx.receiver_wallet_id).first()
-        if not wallet:
-            raise HTTPException(status_code=404, detail="Associated wallet not found.")
-
-        # Get the user
-        user = db.query(User).filter(User.id == wallet.user_id).first()
-
-        # Credit the wallet
-        wallet.balance += tx.amount
-        tx.status = "completed"
-
-        db.commit()
-        db.refresh(tx)
-
-        # Audit log
-        _create_audit_log(
-            db=db,
-            admin_id=admin.id,
-            action="APPROVE_DEPOSIT",
-            target_user_id=str(user.id) if user else None,
-            details=f"Approved deposit {tx.id}: {tx.amount} {tx.currency}",
-        )
-
-        # Process referral milestone (first deposit)
-        if user:
-            process_referral_milestone(db, user, "first_deposit", tx.amount)
-
-        # Send notification and email
-        if user:
-            send_notification_and_email(
-                db=db,
-                user=user,
-                title="Deposit Approved",
-                message=f"Your deposit of {tx.amount} {tx.currency} has been approved and credited to your wallet.",
-                notification_type="deposit",
-                email_subject=f"Deposit Approved - {tx.amount} {tx.currency}",
-                email_html=f"""
-                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
-                  <h2 style="color:#1a1a3e;">Deposit Approved</h2>
-                  <p>Hi {user.full_name},</p>
-                  <p>Your deposit of <strong>{tx.amount} {tx.currency}</strong> has been approved.</p>
-                  <p>The funds have been credited to your wallet.</p>
-                  <hr/>
-                  <small style="color:#888;">Zenfort Markets</small>
-                </div>
-                """,
-            )
-
-    elif payload.status == "rejected":
-        tx.status = "rejected"
-        if payload.rejection_reason:
-            tx.rejection_reason = payload.rejection_reason
-
-        # Get the user
-        wallet = db.query(Wallet).filter(Wallet.id == tx.receiver_wallet_id).first()
-        user = db.query(User).filter(User.id == wallet.user_id).first() if wallet else None
-
-        db.commit()
-        db.refresh(tx)
-
-        # Audit log
-        _create_audit_log(
-            db=db,
-            admin_id=admin.id,
-            action="REJECT_DEPOSIT",
-            target_user_id=str(user.id) if user else None,
-            details=f"Rejected deposit {tx.id}: {tx.amount} {tx.currency} - {payload.rejection_reason or 'No reason'}",
-        )
-
-        # Send notification and email
-        if user:
-            reason = payload.rejection_reason or "Please contact support for details."
-            send_notification_and_email(
-                db=db,
-                user=user,
-                title="Deposit Rejected",
-                message=f"Your deposit of {tx.amount} {tx.currency} was rejected. Reason: {reason}",
-                notification_type="deposit",
-                email_subject=f"Deposit Rejected - {tx.amount} {tx.currency}",
-                email_html=f"""
-                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
-                  <h2 style="color:#1a1a3e;">Deposit Rejected</h2>
-                  <p>Hi {user.full_name},</p>
-                  <p>Your deposit of <strong>{tx.amount} {tx.currency}</strong> was rejected.</p>
-                  <p><strong>Reason:</strong> {reason}</p>
-                  <p>Please contact support if you have any questions.</p>
-                  <hr/>
-                  <small style="color:#888;">Zenfort Markets</small>
-                </div>
-                """,
-            )
-    else:
-        raise HTTPException(status_code=400, detail="Invalid status. Must be 'approved', 'completed', or 'rejected'.")
-
-    return tx
-
-
-# ──────────────────────────────────────────────
-# GET /api/admin/withdrawals/pending — List pending withdrawals
-# ──────────────────────────────────────────────
-@router.get("/withdrawals/pending", response_model=List[TransactionOut])
-def list_pending_withdrawals(
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Return all pending withdrawal transactions ordered by created_at descending."""
-    return (
-        db.query(Transaction)
-        .filter(Transaction.tx_type == "withdrawal", Transaction.status == "pending")
-        .order_by(Transaction.created_at.desc())
-        .all()
-    )
-
-
-# ──────────────────────────────────────────────
-# PATCH /api/admin/withdrawals/{transaction_id}/review — Review withdrawal
-# ──────────────────────────────────────────────
-@router.patch("/withdrawals/{transaction_id}/review", response_model=TransactionOut)
-def review_withdrawal(
-    transaction_id: str,
-    payload: AdminWithdrawalReviewRequest,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """
-    Review and approve/reject a pending withdrawal transaction.
-
-    If approved: Update transaction to "completed" and save payout_tx_hash.
-    If rejected: Update transaction to "rejected", attach rejection_reason, and refund the amount to user's Main Wallet.
-    """
-    # Fetch the pending transaction
-    tx = db.query(Transaction).filter(Transaction.id == transaction_id).first()
-    if not tx:
-        raise HTTPException(status_code=404, detail="Transaction not found.")
-    if tx.tx_type != "withdrawal":
-        raise HTTPException(status_code=400, detail="Transaction is not a withdrawal.")
-    if tx.status != "pending":
-        raise HTTPException(status_code=400, detail=f"Transaction is not pending. Current status: {tx.status}")
-
-    # Get the wallet that was debited
-    wallet = db.query(Wallet).filter(Wallet.id == tx.sender_wallet_id).first()
-    if not wallet:
-        raise HTTPException(status_code=404, detail="Associated wallet not found.")
-
-    # Get the user
-    user = db.query(User).filter(User.id == wallet.user_id).first()
-
-    # Process based on review status
-    if payload.status in ["approved", "completed"]:
-        # Approve: Mark as completed and save payout reference
-        tx.status = "completed"
-        if payload.payout_tx_hash:
-            tx.payout_tx_hash = payload.payout_tx_hash
-
-        db.commit()
-        db.refresh(tx)
-
-        # Audit log
-        _create_audit_log(
-            db=db,
-            admin_id=admin.id,
-            action="APPROVE_WITHDRAWAL",
-            target_user_id=str(user.id) if user else None,
-            details=f"Approved withdrawal {tx.id}: {tx.amount} {tx.currency}",
-        )
-
-        # Send notification and email
-        if user:
-            send_notification_and_email(
-                db=db,
-                user=user,
-                title="Withdrawal Approved",
-                message=f"Your withdrawal of {tx.amount} {tx.currency} has been approved and processed.",
-                notification_type="withdrawal",
-                email_subject=f"Withdrawal Approved - {tx.amount} {tx.currency}",
-                email_html=f"""
-                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
-                  <h2 style="color:#1a1a3e;">Withdrawal Approved</h2>
-                  <p>Hi {user.full_name},</p>
-                  <p>Your withdrawal of <strong>{tx.amount} {tx.currency}</strong> has been approved.</p>
-                  <p>The funds have been sent to your withdrawal address.</p>
-                  <hr/>
-                  <small style="color:#888;">Zenfort Markets</small>
-                </div>
-                """,
-            )
-
-    elif payload.status == "rejected":
-        # Reject: Refund the amount back to the wallet
-        wallet.balance += tx.amount
-        tx.status = "rejected"
-        if payload.rejection_reason:
-            tx.rejection_reason = payload.rejection_reason
-
-        db.commit()
-        db.refresh(tx)
-
-        # Audit log
-        _create_audit_log(
-            db=db,
-            admin_id=admin.id,
-            action="REJECT_WITHDRAWAL",
-            target_user_id=str(user.id) if user else None,
-            details=f"Rejected withdrawal {tx.id}: {tx.amount} {tx.currency} - {payload.rejection_reason or 'No reason'}",
-        )
-
-        # Send notification and email
-        if user:
-            reason = payload.rejection_reason or "Please contact support for details."
-            send_notification_and_email(
-                db=db,
-                user=user,
-                title="Withdrawal Rejected",
-                message=f"Your withdrawal of {tx.amount} {tx.currency} was rejected. Reason: {reason}. The amount has been refunded to your wallet.",
-                notification_type="withdrawal",
-                email_subject=f"Withdrawal Rejected - {tx.amount} {tx.currency}",
-                email_html=f"""
-                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
-                  <h2 style="color:#1a1a3e;">Withdrawal Rejected</h2>
-                  <p>Hi {user.full_name},</p>
-                  <p>Your withdrawal of <strong>{tx.amount} {tx.currency}</strong> was rejected.</p>
-                  <p><strong>Reason:</strong> {reason}</p>
-                  <p>The amount has been refunded to your wallet.</p>
-                  <hr/>
-                  <small style="color:#888;">Zenfort Markets</small>
-                </div>
-                """,
-            )
-    else:
-        raise HTTPException(status_code=400, detail="Invalid status. Must be 'approved', 'completed', or 'rejected'.")
-
-    return tx
-
-
-# ──────────────────────────────────────────────
-# POST /api/admin/plans/ — Create an investment plan
-# ──────────────────────────────────────────────
-@router.post("/plans/", response_model=InvestmentPlanResponse, status_code=status.HTTP_201_CREATED)
-def create_investment_plan(
-    payload: InvestmentPlanCreate,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Create a new investment plan template."""
-    existing = db.query(InvestmentPlan).filter(InvestmentPlan.name == payload.name).first()
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"An investment plan named '{payload.name}' already exists.",
-        )
-    plan = InvestmentPlan(
-        name=payload.name,
-        min_amount=payload.min_amount,
-        max_amount=payload.max_amount,
-        daily_roi_percent=payload.daily_roi_percent,
-        duration_days=payload.duration_days,
-        is_active=True,
-    )
-    db.add(plan)
-    db.commit()
-    db.refresh(plan)
-    return plan
-
-
-# ──────────────────────────────────────────────
-# GET /api/admin/plans/ — List all investment plans
-# ──────────────────────────────────────────────
-@router.get("/plans/", response_model=List[InvestmentPlanResponse])
-def list_all_plans(
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """List all investment plans (active and inactive)."""
-    return (
-        db.query(InvestmentPlan)
-        .order_by(InvestmentPlan.created_at.asc())
-        .all()
-    )
-
-
-# ──────────────────────────────────────────────
-# PATCH /api/admin/plans/{plan_id} — Update plan / toggle is_active
-# ──────────────────────────────────────────────
-@router.patch("/plans/{plan_id}", response_model=InvestmentPlanResponse)
-def update_investment_plan(
-    plan_id: str,
-    payload: InvestmentPlanUpdate,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Partially update an investment plan. Supports toggling is_active."""
-    plan = db.query(InvestmentPlan).filter(InvestmentPlan.id == plan_id).first()
-    if not plan:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investment plan not found.")
-
-    # Check name uniqueness if name is being changed
-    if payload.name is not None and payload.name != plan.name:
-        conflict = db.query(InvestmentPlan).filter(InvestmentPlan.name == payload.name).first()
-        if conflict:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"An investment plan named '{payload.name}' already exists.",
-            )
-        plan.name = payload.name
-
-    if payload.min_amount is not None:
-        plan.min_amount = payload.min_amount
-    if payload.max_amount is not None:
-        plan.max_amount = payload.max_amount
-    if payload.daily_roi_percent is not None:
-        plan.daily_roi_percent = payload.daily_roi_percent
-    if payload.duration_days is not None:
-        plan.duration_days = payload.duration_days
-    if payload.is_active is not None:
-        plan.is_active = payload.is_active
-
-    db.commit()
-    db.refresh(plan)
-    return plan
-
-
-# ──────────────────────────────────────────────
-# POST /api/admin/investments/process-roi — ROI Staking Engine
-# ──────────────────────────────────────────────
-@router.post("/investments/process-roi", status_code=status.HTTP_200_OK)
-def process_roi(
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-) -> Dict[str, Any]:
-    """
-    ROI Staking Distribution Engine.
-
-    For every active UserInvestment:
-    1. Calculate daily_profit = amount_invested * (daily_roi_percent / 100).
-    2. Credit the user's Profit Wallet.
-    3. Increment total_earned on the investment.
-    4. If maturity_date has been reached:
-       a. Transition investment status to 'completed'.
-       b. Return the principal (amount_invested) to the user's Main Wallet.
-
-    All mutations are flushed and committed in a single transaction.
-    Returns a summary dict with counts of processed and matured investments.
-    """
-    now = datetime.now(timezone.utc)
-    active_investments = (
-        db.query(UserInvestment)
-        .filter(UserInvestment.status == "active")
-        .all()
-    )
-
-    processed_count = 0
-    matured_count = 0
-
-    for inv in active_investments:
-        # Fetch profit wallet
-        profit_wallet = (
-            db.query(Wallet)
-            .filter(Wallet.user_id == inv.user_id, Wallet.wallet_type == "profit")
-            .first()
-        )
-        if not profit_wallet:
-            # Skip if wallet is missing (shouldn't happen in normal operation)
-            continue
-
-        daily_profit = Decimal(str(inv.amount_invested)) * (
-            Decimal(str(inv.daily_roi_percent)) / Decimal("100")
-        )
-
-        # Credit daily ROI to Profit Wallet
-        profit_wallet.balance += daily_profit
-        inv.total_earned = Decimal(str(inv.total_earned)) + daily_profit
-
-        # Record ROI credit transaction
-        roi_tx = Transaction(
-            receiver_wallet_id=profit_wallet.id,
-            amount=daily_profit,
-            currency=profit_wallet.currency,
-            tx_type="roi_credit",
-            description=f"Daily ROI for investment {inv.id}",
-            status="completed",
-        )
-        db.add(roi_tx)
-        processed_count += 1
-
-        # Check maturity (make maturity_date timezone-aware for comparison)
-        maturity = inv.maturity_date
-        if maturity.tzinfo is None:
-            maturity = maturity.replace(tzinfo=timezone.utc)
-
-        if now >= maturity:
-            # Mark investment as completed
-            inv.status = "completed"
-            matured_count += 1
-
-            # Return principal to Main Wallet
-            main_wallet = (
-                db.query(Wallet)
-                .filter(Wallet.user_id == inv.user_id, Wallet.wallet_type == "main")
-                .first()
-            )
-            if main_wallet:
-                main_wallet.balance += Decimal(str(inv.amount_invested))
-                principal_tx = Transaction(
-                    receiver_wallet_id=main_wallet.id,
-                    amount=inv.amount_invested,
-                    currency=main_wallet.currency,
-                    tx_type="principal_return",
-                    description=f"Principal returned for matured investment {inv.id}",
-                    status="completed",
-                )
-                db.add(principal_tx)
-
-    db.commit()
+@router.get("/stats", response_model=AdminStats)
+def stats(admin=Depends(get_current_admin)):
+    tx, us, wa, inv = run_parallel(*_stats_parts(datetime.now(timezone.utc)))
+    return AdminStats(**_compose_stats(tx, us, wa, inv))
+
+
+@router.get("/queue-counts")
+def queue_counts(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Sidebar badges. One query; polled every 30 s."""
+    T = Transaction
+    pend = T.status == "pending"
+    dep = select(func.count()).where(T.tx_type == "deposit", pend).scalar_subquery()
+    wd = select(func.count()).where(T.tx_type == "withdrawal", pend).scalar_subquery()
+    kyc = select(func.count()).where(User.kyc_status == KYCStatus.PENDING).scalar_subquery()
+    d, w, k = db.execute(select(dep, wd, kyc)).one()
+    return {"deposits": d, "withdrawals": w, "kyc": k}
+
+
+@router.get("/overview")
+def overview(admin=Depends(get_current_admin)):
+    """Everything the admin overview needs, in one request with parallel queries."""
+    def recent(db):
+        rows = db.query(Transaction).order_by(Transaction.created_at.desc()).limit(8).all()
+        return _with_owners(db, rows)
+
+    tx, us, wa, inv, latest = run_parallel(*_stats_parts(datetime.now(timezone.utc)), recent)
     return {
-        "status": "ok",
-        "processed": processed_count,
-        "matured": matured_count,
-        "timestamp": now.isoformat(),
+        "stats": AdminStats(**_compose_stats(tx, us, wa, inv)).model_dump(mode="json"),
+        "oldest": {"deposit": tx[2], "withdrawal": tx[5], "kyc": us[4]},
+        "recent": [AdminTransactionOut(**r).model_dump(mode="json") for r in latest],
     }
 
 
-# ──────────────────────────────────────────────
-# GET /api/admin/audit-logs — List system audit logs
-# ──────────────────────────────────────────────
-@router.get("/audit-logs", response_model=List[AuditLogResponse])
-def list_audit_logs(
-    skip: int = 0,
-    limit: int = 100,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
+# ── Users ─────────────────────────────────────
+@router.get("/users", response_model=UserPage)
+def list_users(
+    q: Optional[str] = Query(None, description="Search email or name"),
+    filter: Optional[str] = Query(None, pattern="^(blocked|kyc_pending|admins|inactive)$"),
+    skip: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=200),
+    admin=Depends(get_current_admin), db: Session = Depends(get_db),
 ):
-    """Return system-wide administrative action logs ordered by latest first."""
-    return (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
+    query = db.query(User)
+    if q:
+        like = f"%{q.strip()}%"
+        query = query.filter(or_(User.email.ilike(like), User.full_name.ilike(like)))
+    if filter == "blocked":
+        query = query.filter(User.is_blocked.is_(True))
+    elif filter == "kyc_pending":
+        query = query.filter(User.kyc_status == KYCStatus.PENDING)
+    elif filter == "admins":
+        query = query.filter(User.is_admin.is_(True))
+    elif filter == "inactive":
+        query = query.filter(User.is_active.is_(False))
+    total = query.count()
+    items = query.order_by(User.created_at.desc()).offset(skip).limit(limit).all()
+    return UserPage(total=total, items=items)
+
+
+@router.get("/users/{user_id}", response_model=AdminUserDetail)
+def user_detail(user_id: str, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Everything about one customer in one call: profile, balances, investments, recent ledger."""
+    user = _get_user(db, user_id=user_id)
+    wallets = db.query(Wallet).filter(Wallet.user_id == user.id).order_by(Wallet.wallet_type).all()
+    ids = [w.id for w in wallets]
+    txs = (db.query(Transaction)
+           .filter(Transaction.sender_wallet_id.in_(ids) | Transaction.receiver_wallet_id.in_(ids))
+           .order_by(Transaction.created_at.desc()).limit(50).all()) if ids else []
+    plans = dict(db.query(InvestmentPlan.id, InvestmentPlan.name).all())
+    invs = db.query(UserInvestment).filter(UserInvestment.user_id == user.id) \
+        .order_by(UserInvestment.created_at.desc()).all()
+    referrer = db.query(User.email).filter(User.id == user.referred_by_id).scalar() if user.referred_by_id else None
+    return {
+        "user": user, "wallets": wallets,
+        "investments": [{**{c: getattr(i, c) for c in (
+            "id", "plan_id", "amount_invested", "daily_roi_percent", "duration_days", "total_earned",
+            "status", "start_date", "maturity_date", "created_at", "days_paid")},
+            "plan_name": plans.get(i.plan_id)} for i in invs],
+        "transactions": [tx_view(t, ids) for t in txs],
+        "referred_by_email": referrer,
+    }
+
+
+@router.patch("/users/{user_id}/status", response_model=UserOut)
+def update_user_status(user_id: str, payload: AdminUserStatusUpdate,
+                       admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    user = _get_user(db, user_id=user_id)
+    if user.id == admin.id and (payload.is_blocked or payload.is_active is False):
+        raise HTTPException(status_code=400, detail="You can't restrict your own admin account.")
+
+    changes, notices = [], []
+    for field, on_msg, off_msg in (
+        ("is_blocked", "Your account has been restricted. Contact support for details.",
+         "Your account restriction has been lifted."),
+        ("can_deposit", "Deposits are turned back on for your account.",
+         "Deposits have been turned off for your account. Contact support for details."),
+        ("can_withdraw", "Withdrawals are turned back on for your account.",
+         "Withdrawals have been turned off for your account. Contact support for details."),
+        ("is_active", None, None),
+    ):
+        new = getattr(payload, field)
+        if new is None or new == getattr(user, field):
+            continue
+        setattr(user, field, new)
+        changes.append(f"{field}={new}")
+        if on_msg:
+            notices.append(on_msg if new else off_msg)
+
+    if not changes:
+        return user
+    action = "BLOCK_USER" if payload.is_blocked else "UNBLOCK_USER" if payload.is_blocked is False else "UPDATE_USER_FLAGS"
+    _audit(db, admin, action, user.id, ", ".join(changes))
+    db.commit()
+    db.refresh(user)
+    for msg in notices:
+        _notify(db, user, "Account update", msg, "account")
+    return user
+
+
+@router.patch("/users/{user_id}/role", response_model=UserOut)
+def set_role(user_id: str, payload: RoleUpdate, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Promote a customer to admin, or remove admin rights."""
+    user = _get_user(db, user_id=user_id)
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail="You can't change your own role. Ask another admin.")
+    if user.is_admin == payload.is_admin:
+        return user
+    if payload.is_admin and not user.is_active:
+        raise HTTPException(status_code=400, detail="Reopen this account before making it an admin.")
+    if not payload.is_admin:
+        # Lock the admin rows (Postgres can't lock an aggregate) so two simultaneous demotions can't both pass.
+        admins = db.query(User.id).filter(User.is_admin.is_(True), User.is_active.is_(True)).with_for_update().all()
+        if len(admins) <= 1:
+            raise HTTPException(status_code=400, detail="There must always be at least one admin.")
+    user.is_admin = payload.is_admin
+    _audit(db, admin, "PROMOTE_ADMIN" if payload.is_admin else "DEMOTE_ADMIN", user.id,
+           f"{user.email} {'given' if payload.is_admin else 'removed from'} admin access")
+    db.commit()
+    db.refresh(user)
+    _notify(db, user, "Account role changed",
+            "You now have admin access to the operations console." if payload.is_admin
+            else "Your admin access has been removed.", "account")
+    return user
+
+
+@router.post("/users/{user_id}/impersonate")
+def impersonate(user_id: str, request: Request, response: Response,
+                admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    """
+    View the app as this customer, read-only, for troubleshooting.
+    The admin's own session is parked in a separate httpOnly cookie that only
+    /api/auth/* receives, and restored by POST /api/auth/impersonation/exit.
+    """
+    user = _get_user(db, user_id=user_id)
+    if user.is_admin:
+        raise HTTPException(status_code=400, detail="Admin accounts can't be viewed this way.")
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="This account is closed.")
+    admin_token, _ = _extract_token(request)
+    set_cookie(response, ADMIN_COOKIE, admin_token, settings.ACCESS_TOKEN_EXPIRE_MINUTES, path="/api/auth")
+    set_cookie(response, SESSION_COOKIE, create_impersonation_token(user.email, admin.email), IMPERSONATION_MINUTES)
+    _audit(db, admin, "IMPERSONATE_START", user.id, f"Viewing as {user.email} (read-only, {IMPERSONATION_MINUTES} min)")
+    db.commit()
+    return {"redirect": "/app.html", "expires_in_minutes": IMPERSONATION_MINUTES}
+
+
+@router.patch("/users/{user_id}/activate", response_model=UserOut, deprecated=True)
+def activate_user(user_id: str, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    return update_user_status(user_id, AdminUserStatusUpdate(is_active=True), admin, db)
+
+
+@router.patch("/users/{user_id}/deactivate", response_model=UserOut, deprecated=True)
+def deactivate_user(user_id: str, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    return update_user_status(user_id, AdminUserStatusUpdate(is_active=False), admin, db)
+
+
+# ── Manual balance adjustments ────────────────
+@router.post("/credit", response_model=AdminTransactionOut, status_code=201)
+def credit_user_wallet(payload: AdminCreditRequest, admin=Depends(get_current_admin),
+                       db: Session = Depends(get_db)):
+    user = _get_user(db, user_id=payload.user_id, email=payload.user_email)
+    amount = money(payload.amount)
+    wallet = lock_wallet(db, user.id, payload.wallet_type)
+    credit(wallet, amount)
+    note = (payload.description or "").strip()[:200] or f"Credit to {payload.wallet_type} wallet"
+    tx = Transaction(receiver_wallet_id=wallet.id, amount=amount, currency=CUR, tx_type="admin_credit",
+                     status="completed", description=note, reviewed_by_id=admin.id,
+                     reviewed_at=datetime.now(timezone.utc))
+    db.add(tx)
+    _audit(db, admin, "CREDIT_WALLET", user.id, f"+{usd(amount)} to {payload.wallet_type}: {note}")
+    db.commit()
+    db.refresh(tx)
+    _notify(db, user, "Wallet credited", f"{usd(amount)} was added to your {payload.wallet_type.title()} wallet.",
+            "deposit", rows=[("Amount", usd(amount)), ("Wallet", payload.wallet_type.title()), ("Note", note)])
+    return admin_tx_view(tx, user)
+
+
+@router.post("/wallets/debit", response_model=AdminTransactionOut, status_code=201)
+def debit_user_wallet(payload: AdminDebitRequest, admin=Depends(get_current_admin),
+                      db: Session = Depends(get_db)):
+    if not payload.user_id and not payload.user_email:
+        raise HTTPException(status_code=422, detail="Provide user_id or user_email.")
+    user = _get_user(db, user_id=payload.user_id, email=payload.user_email)
+    amount = money(payload.amount)
+    wallet = lock_wallet(db, user.id, payload.wallet_type)
+    debit(wallet, amount, "The wallet balance is lower than that amount.")
+    note = (payload.description or "").strip()[:200] or f"Debit from {payload.wallet_type} wallet"
+    tx = Transaction(sender_wallet_id=wallet.id, amount=amount, currency=CUR, tx_type="admin_debit",
+                     status="completed", description=note, reviewed_by_id=admin.id,
+                     reviewed_at=datetime.now(timezone.utc))
+    db.add(tx)
+    _audit(db, admin, "DEBIT_WALLET", user.id, f"-{usd(amount)} from {payload.wallet_type}: {note}")
+    db.commit()
+    db.refresh(tx)
+    _notify(db, user, "Wallet debited", f"{usd(amount)} was deducted from your {payload.wallet_type.title()} wallet.",
+            "account", rows=[("Amount", usd(amount)), ("Wallet", payload.wallet_type.title()), ("Note", note)])
+    return admin_tx_view(tx, user)
+
+
+# ── Ledger ────────────────────────────────────
+@router.get("/transactions", response_model=List[AdminTransactionOut])
+def list_all_transactions(
+    response: Response,
+    tx_type: Optional[str] = None, status_: Optional[str] = Query(None, alias="status"),
+    q: Optional[str] = Query(None, description="User email contains"),
+    skip: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200),
+    admin=Depends(get_current_admin), db: Session = Depends(get_db),
+):
+    query = db.query(Transaction)
+    if tx_type:
+        query = query.filter(Transaction.tx_type == tx_type)
+    if status_:
+        query = query.filter(Transaction.status == status_)
+    if q:
+        wallet_ids = db.query(Wallet.id).join(User, User.id == Wallet.user_id) \
+            .filter(User.email.ilike(f"%{q.strip()}%")).subquery()
+        query = query.filter(Transaction.sender_wallet_id.in_(wallet_ids.select())
+                             | Transaction.receiver_wallet_id.in_(wallet_ids.select()))
+    response.headers["X-Total-Count"] = str(query.count())
+    rows = query.order_by(Transaction.created_at.desc()).offset(skip).limit(limit).all()
+    return _with_owners(db, rows)
+
+
+@router.get("/transactions/{tx_id}", response_model=AdminTransactionOut)
+def transaction_detail(tx_id: str, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    tx = db.query(Transaction).filter(Transaction.id == tx_id).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+    return admin_tx_view(tx, _owner_of(db, tx), include_proof=True)
+
+
+@router.get("/deposits/pending", response_model=List[AdminTransactionOut])
+def list_pending_deposits(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    rows = db.query(Transaction).filter(Transaction.tx_type == "deposit", Transaction.status == "pending") \
+        .order_by(Transaction.created_at.asc()).all()   # oldest first: a review queue is FIFO
+    return _with_owners(db, rows)
+
+
+@router.get("/withdrawals/pending", response_model=List[AdminTransactionOut])
+def list_pending_withdrawals(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    rows = db.query(Transaction).filter(Transaction.tx_type == "withdrawal", Transaction.status == "pending") \
+        .order_by(Transaction.created_at.asc()).all()
+    return _with_owners(db, rows)
+
+
+def _lock_pending(db: Session, tx_id: str, kind: str) -> Transaction:
+    tx = db.query(Transaction).filter(Transaction.id == tx_id).with_for_update().populate_existing().first()
+    if not tx or tx.tx_type != kind:
+        raise HTTPException(status_code=404, detail=f"{kind.title()} not found.")
+    if tx.status != "pending":
+        raise HTTPException(status_code=409, detail=f"This {kind} was already {tx.status}.")
+    return tx
+
+
+@router.patch("/deposits/{transaction_id}/review", response_model=AdminTransactionOut)
+def review_deposit(transaction_id: str, payload: AdminDepositReviewRequest,
+                   admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    tx = _lock_pending(db, transaction_id, "deposit")
+    if not tx.receiver_wallet_id:
+        raise HTTPException(status_code=409, detail="This deposit isn't linked to any wallet (a legacy record), so it can't be credited.")
+    wallet = lock_wallet_by_id(db, tx.receiver_wallet_id)
+    user = db.query(User).filter(User.id == wallet.user_id).first()
+    decision = _parse_status(payload.status)
+    tx.reviewed_by_id, tx.reviewed_at = admin.id, datetime.now(timezone.utc)
+
+    if decision == "completed":
+        credit(wallet, money(tx.amount))
+        tx.status = "completed"
+        _audit(db, admin, "APPROVE_DEPOSIT", user.id, f"{usd(tx.amount)} via {tx.gateway_name} ({tx.id})")
+    else:
+        reason = (payload.rejection_reason or "").strip()
+        if not reason:
+            raise HTTPException(status_code=422, detail="Give the user a reason for the rejection.")
+        tx.status, tx.rejection_reason = "rejected", reason[:500]
+        _audit(db, admin, "REJECT_DEPOSIT", user.id, f"{usd(tx.amount)} ({tx.id}): {reason}")
+    db.commit()
+    db.refresh(tx)
+
+    if tx.status == "completed":
+        process_referral_milestone(db, user, "first_deposit", tx.amount)
+        _notify(db, user, "Deposit approved",
+                f"Your {usd(tx.amount)} deposit via {tx.gateway_name} is now in your Main wallet.", "deposit",
+                rows=[("Amount", usd(tx.amount)), ("Method", tx.gateway_name or "—"),
+                      *([("Transaction hash", tx.tx_hash)] if tx.tx_hash else [])])
+    else:
+        _notify(db, user, "Deposit rejected",
+                f"Your {usd(tx.amount)} deposit via {tx.gateway_name} was not approved.", "deposit",
+                rows=[("Amount", usd(tx.amount)), ("Method", tx.gateway_name or "—"), ("Reason", tx.rejection_reason)])
+    return admin_tx_view(tx, user)
+
+
+@router.patch("/withdrawals/{transaction_id}/review", response_model=AdminTransactionOut)
+def review_withdrawal(transaction_id: str, payload: AdminWithdrawalReviewRequest,
+                      admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    tx = _lock_pending(db, transaction_id, "withdrawal")
+    if not tx.sender_wallet_id:
+        raise HTTPException(status_code=409, detail="This withdrawal isn't linked to any wallet (a legacy record), so it can't be paid or refunded.")
+    wallet = lock_wallet_by_id(db, tx.sender_wallet_id)
+    user = db.query(User).filter(User.id == wallet.user_id).first()
+    decision = _parse_status(payload.status)
+    tx.reviewed_by_id, tx.reviewed_at = admin.id, datetime.now(timezone.utc)
+    payout = money(tx.amount) - money(tx.fee or 0)
+
+    if decision == "completed":
+        ref = (payload.payout_tx_hash or "").strip()
+        if not ref:
+            raise HTTPException(status_code=422, detail="Paste the payout transaction hash before marking it paid.")
+        tx.status, tx.payout_tx_hash = "completed", ref[:255]
+        _audit(db, admin, "APPROVE_WITHDRAWAL", user.id, f"{usd(tx.amount)} ({tx.id}) paid, ref {ref}")
+    else:
+        reason = (payload.rejection_reason or "").strip()
+        if not reason:
+            raise HTTPException(status_code=422, detail="Give the user a reason for the rejection.")
+        credit(wallet, money(tx.amount))     # release the held funds
+        tx.status, tx.rejection_reason = "rejected", reason[:500]
+        _audit(db, admin, "REJECT_WITHDRAWAL", user.id, f"{usd(tx.amount)} ({tx.id}) refunded: {reason}")
+    db.commit()
+    db.refresh(tx)
+
+    if tx.status == "completed":
+        _notify(db, user, "Withdrawal sent",
+                f"We sent {usd(payout)} worth of {tx.asset} on {tx.network} to your address.", "withdrawal",
+                rows=[("Amount sent", usd(payout)), ("Network fee", usd(tx.fee or 0)),
+                      ("Asset", f"{tx.asset} on {tx.network}"), ("To address", tx.withdrawal_address or "—"),
+                      ("Payout reference", tx.payout_tx_hash)])
+    else:
+        _notify(db, user, "Withdrawal rejected",
+                f"Your {usd(tx.amount)} withdrawal was not processed and the funds are back in your Main wallet.",
+                "withdrawal", rows=[("Amount returned", usd(tx.amount)), ("Reason", tx.rejection_reason)])
+    return admin_tx_view(tx, user)
+
+
+# ── KYC ───────────────────────────────────────
+@router.get("/kyc/pending", response_model=List[UserOut])
+def list_pending_kyc(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    return db.query(User).filter(User.kyc_status == KYCStatus.PENDING).order_by(User.updated_at.asc().nullsfirst()).all()
+
+
+@router.get("/kyc/{user_id}/document")
+def kyc_document(user_id: str, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    user = _get_user(db, user_id=user_id)
+    if not user.kyc_document_url:
+        raise HTTPException(status_code=404, detail="No document on file.")
+    return {"user_id": str(user.id), "document": storage.url_for(user.kyc_document_url),
+            "content_type": storage.content_type(user.kyc_document_url)}
+
+
+@router.patch("/kyc/{user_id}/review", response_model=UserOut)
+def review_kyc(user_id: str, payload: AdminKYCReviewRequest,
+               admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    user = _get_user(db, user_id=user_id)
+    if user.kyc_status != KYCStatus.PENDING:
+        raise HTTPException(status_code=409, detail="There's no pending submission to review.")
+    if payload.status.value == "VERIFIED":
+        user.kyc_status, user.is_verified, user.kyc_rejection_reason = KYCStatus.VERIFIED, True, None
+        _audit(db, admin, "APPROVE_KYC", user.id, "Identity verified")
+    else:
+        reason = (payload.rejection_reason or "").strip()
+        if not reason:
+            raise HTTPException(status_code=422, detail="Tell the user what to fix.")
+        user.kyc_status, user.is_verified, user.kyc_rejection_reason = KYCStatus.REJECTED, False, reason[:500]
+        _audit(db, admin, "REJECT_KYC", user.id, reason)
+    db.commit()
+    db.refresh(user)
+    if user.kyc_status == KYCStatus.VERIFIED:
+        _notify(db, user, "Identity verified", "Your identity check passed. Withdrawals are now available.", "kyc")
+    else:
+        _notify(db, user, "Identity check needs another look",
+                "We couldn't verify the document you sent. You can upload a new one from Settings.", "kyc",
+                rows=[("What to fix", user.kyc_rejection_reason)])
+    return user
+
+
+# ── Investment plans ──────────────────────────
+@router.post("/plans/", response_model=InvestmentPlanResponse, status_code=201)
+def create_investment_plan(payload: InvestmentPlanCreate, admin=Depends(get_current_admin),
+                           db: Session = Depends(get_db)):
+    if db.query(InvestmentPlan.id).filter(func.lower(InvestmentPlan.name) == payload.name.lower()).first():
+        raise HTTPException(status_code=409, detail=f"A plan named “{payload.name}” already exists.")
+    plan = InvestmentPlan(**payload.model_dump(), is_active=True)
+    db.add(plan)
+    _audit(db, admin, "CREATE_PLAN", None, f"{payload.name}: {payload.daily_roi_percent}%/day × {payload.duration_days}d")
+    db.commit()
+    clear_public_cache()
+    db.refresh(plan)
+    return plan
+
+
+@router.get("/plans/", response_model=List[InvestmentPlanResponse])
+def list_all_plans(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    return db.query(InvestmentPlan).order_by(InvestmentPlan.created_at.asc()).all()
+
+
+@router.patch("/plans/{plan_id}", response_model=InvestmentPlanResponse)
+def update_investment_plan(plan_id: str, payload: InvestmentPlanUpdate,
+                           admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    plan = db.query(InvestmentPlan).filter(InvestmentPlan.id == plan_id).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    data = payload.model_dump(exclude_unset=True)
+    if "name" in data and data["name"].strip().lower() != plan.name.lower():
+        if db.query(InvestmentPlan.id).filter(func.lower(InvestmentPlan.name) == data["name"].strip().lower()).first():
+            raise HTTPException(status_code=409, detail="Another plan already uses that name.")
+    merged = {c: data.get(c, getattr(plan, c)) for c in
+              ("name", "description", "min_amount", "max_amount", "daily_roi_percent", "duration_days")}
+    _revalidate(InvestmentPlanCreate, merged)
+    for k, v in data.items():
+        setattr(plan, k, v.strip() if isinstance(v, str) else v)
+    _audit(db, admin, "UPDATE_PLAN", None, f"{plan.name}: {', '.join(f'{k}={v}' for k, v in data.items())}")
+    db.commit()
+    clear_public_cache()
+    db.refresh(plan)
+    return plan
+
+
+@router.delete("/plans/{plan_id}", status_code=204)
+def delete_investment_plan(plan_id: str, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    plan = db.query(InvestmentPlan).filter(InvestmentPlan.id == plan_id).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    if db.query(UserInvestment.id).filter(UserInvestment.plan_id == plan.id).first():
+        raise HTTPException(status_code=409, detail="This plan has investments. Pause it instead of deleting it.")
+    _audit(db, admin, "DELETE_PLAN", None, plan.name)
+    db.delete(plan)
+    db.commit()
+    clear_public_cache()
+    return Response(status_code=204)
+
+
+@router.get("/investments")
+def list_investments(status_: Optional[str] = Query(None, alias="status"),
+                     skip: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200),
+                     admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    q = db.query(UserInvestment, User.email, InvestmentPlan.name, User.full_name) \
+        .join(User, User.id == UserInvestment.user_id) \
+        .join(InvestmentPlan, InvestmentPlan.id == UserInvestment.plan_id)
+    if status_:
+        q = q.filter(UserInvestment.status == status_)
+    rows = q.order_by(UserInvestment.created_at.desc()).offset(skip).limit(limit).all()
+    return [{"id": str(i.id), "user_id": str(i.user_id), "user_email": email, "user_name": full_name, "plan_name": name,
+             "amount_invested": str(i.amount_invested), "daily_roi_percent": str(i.daily_roi_percent),
+             "duration_days": i.duration_days, "days_paid": i.days_paid, "total_earned": str(i.total_earned),
+             "status": i.status, "start_date": i.start_date.isoformat(),
+             "maturity_date": i.maturity_date.isoformat()} for i, email, name, full_name in rows]
+
+
+@router.post("/investments/process-roi")
+def process_roi(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Run accrual now. Safe to call any number of times; the scheduler also runs it hourly."""
+    result = run_roi_accrual(db)
+    _audit(db, admin, "RUN_ROI", None, f"days={result['days_paid']} amount={result['amount_paid']}")
+    db.commit()
+    return result
+
+
+# ── Payment methods ───────────────────────────
+@router.get("/payment-methods", response_model=List[PaymentMethodOut])
+def list_methods(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    return db.query(PaymentMethod).order_by(PaymentMethod.asset, PaymentMethod.network).all()
+
+
+@router.post("/payment-methods", response_model=PaymentMethodOut, status_code=201)
+def create_method(payload: PaymentMethodCreate, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    m = PaymentMethod(**payload.model_dump())
+    m.asset = m.asset.upper()
+    db.add(m)
+    _audit(db, admin, "CREATE_PAYMENT_METHOD", None, f"{m.asset} ({m.network})")
+    db.commit()
+    clear_public_cache()
+    db.refresh(m)
+    return m
+
+
+@router.patch("/payment-methods/{method_id}", response_model=PaymentMethodOut)
+def update_method(method_id: str, payload: PaymentMethodUpdate,
+                  admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    m = db.query(PaymentMethod).filter(PaymentMethod.id == method_id).first()
+    if not m:
+        raise HTTPException(status_code=404, detail="Payment method not found.")
+    data = payload.model_dump(exclude_unset=True)
+    merged = {c: data.get(c, getattr(m, c)) for c in PaymentMethodCreate.model_fields}
+    _revalidate(PaymentMethodCreate, merged)
+    for k, v in data.items():
+        setattr(m, k, v.upper() if k == "asset" and v else v)
+    _audit(db, admin, "UPDATE_PAYMENT_METHOD", None,
+           f"{m.asset} ({m.network}): " + ", ".join(f"{k}={v}" for k, v in data.items()))
+    db.commit()
+    clear_public_cache()
+    db.refresh(m)
+    return m
+
+
+@router.delete("/payment-methods/{method_id}", status_code=204)
+def delete_method(method_id: str, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    m = db.query(PaymentMethod).filter(PaymentMethod.id == method_id).first()
+    if not m:
+        raise HTTPException(status_code=404, detail="Payment method not found.")
+    if db.query(Transaction.id).filter(Transaction.payment_method_id == m.id).first():
+        raise HTTPException(status_code=409, detail="Transactions reference this method. Turn it off instead.")
+    _audit(db, admin, "DELETE_PAYMENT_METHOD", None, f"{m.asset} ({m.network})")
+    db.delete(m)
+    db.commit()
+    clear_public_cache()
+    return Response(status_code=204)
+
+
+# ── Audit trail ───────────────────────────────
+@router.get("/audit-logs", response_model=List[AuditLogResponse])
+def list_audit_logs(skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500),
+                    admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    rows = db.query(AuditLog).order_by(AuditLog.created_at.desc()).offset(skip).limit(limit).all()
+    ids = {r.admin_id for r in rows} | {r.target_user_id for r in rows if r.target_user_id}
+    emails = dict(db.query(User.id, User.email).filter(User.id.in_(ids)).all()) if ids else {}
+    return [{"id": r.id, "admin_id": r.admin_id, "admin_email": emails.get(r.admin_id), "action": r.action,
+             "target_user_id": r.target_user_id, "target_email": emails.get(r.target_user_id),
+             "details": r.details, "created_at": r.created_at} for r in rows]

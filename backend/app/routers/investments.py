@@ -1,154 +1,74 @@
 """
-app/routers/investments.py — Phase 4: Investment Plans & User Investments
+app/routers/investments.py — plans the admin publishes, and user subscriptions.
 """
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List
-import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
-from app.models import User, Wallet, InvestmentPlan, UserInvestment, Transaction
+from app.models import InvestmentPlan, Transaction, User, UserInvestment
 from app.schemas import InvestmentPlanResponse, InvestRequest, UserInvestmentResponse
 from app.security import get_current_user
+from app.services.email_templates import usd
+from app.services.ledger import debit, lock_wallet, money
 from app.services.referral_service import process_referral_milestone
 
 router = APIRouter(prefix="/api/investments", tags=["Investments"])
 
 
-# ──────────────────────────────────────────────
-# GET /api/investments/plans — List active plans (user-facing)
-# ──────────────────────────────────────────────
+def _view(inv: UserInvestment, plan_name: str | None) -> dict:
+    data = {c: getattr(inv, c) for c in ("id", "plan_id", "amount_invested", "daily_roi_percent",
+                                         "duration_days", "total_earned", "status", "start_date",
+                                         "maturity_date", "created_at", "days_paid")}
+    data["plan_name"] = plan_name
+    return data
+
+
 @router.get("/plans", response_model=List[InvestmentPlanResponse])
-def list_active_plans(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Return all currently active investment plans visible to authenticated users."""
-    return (
-        db.query(InvestmentPlan)
-        .filter(InvestmentPlan.is_active.is_(True))
-        .order_by(InvestmentPlan.created_at.asc())
-        .all()
-    )
+def list_active_plans(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return (db.query(InvestmentPlan).filter(InvestmentPlan.is_active.is_(True))
+            .order_by(InvestmentPlan.min_amount.asc()).all())
 
 
-# ──────────────────────────────────────────────
-# POST /api/investments/ — Subscribe to a plan (wallet-first)
-# ──────────────────────────────────────────────
-@router.post("/", response_model=UserInvestmentResponse, status_code=status.HTTP_201_CREATED)
-def create_investment(
-    payload: InvestRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Subscribe to an investment plan, debiting the user's Main Wallet.
-
-    Guards (in order):
-    1. User must not be blocked.
-    2. Plan must exist and be active.
-    3. Amount must be within plan min/max range.
-    4. Main Wallet balance must be sufficient.
-    All mutations are committed atomically.
-    """
-    # Guard 1 — blocked user
+@router.post("/", response_model=UserInvestmentResponse, status_code=201)
+def create_investment(payload: InvestRequest, current_user: User = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
     if current_user.is_blocked:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Your account is blocked. Contact support.",
-        )
-
-    # Guard 2 — plan exists and is active
+        raise HTTPException(status_code=403, detail="Your account is restricted. Contact support.")
     plan = db.query(InvestmentPlan).filter(InvestmentPlan.id == payload.plan_id).first()
-    if not plan:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investment plan not found.")
-    if not plan.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This investment plan is currently inactive.",
-        )
+    if not plan or not plan.is_active:
+        raise HTTPException(status_code=404, detail="This plan isn't available.")
+    amount = money(payload.amount)
+    if amount < plan.min_amount or amount > plan.max_amount:
+        raise HTTPException(status_code=422,
+                            detail=f"Enter between {usd(plan.min_amount)} and {usd(plan.max_amount)}.")
 
-    amount = Decimal(str(payload.amount))
-
-    # Guard 3 — amount within plan bounds
-    if amount < plan.min_amount:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Minimum investment for this plan is {plan.min_amount}.",
-        )
-    if amount > plan.max_amount:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Maximum investment for this plan is {plan.max_amount}.",
-        )
-
-    # Guard 4 — sufficient Main Wallet balance
-    main_wallet = (
-        db.query(Wallet)
-        .filter(Wallet.user_id == current_user.id, Wallet.wallet_type == "main")
-        .first()
-    )
-    if not main_wallet:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Main wallet not found.")
-    if main_wallet.balance < amount:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Insufficient balance in your Main Wallet.",
-        )
-
-    # Atomic: debit wallet, create investment, record ledger entry
+    main = lock_wallet(db, current_user.id, "main")
+    debit(main, amount, "Not enough funds in your Main wallet.")
     now = datetime.now(timezone.utc)
-    maturity = now + timedelta(days=plan.duration_days)
-
-    main_wallet.balance -= amount
-
-    investment = UserInvestment(
-        user_id=current_user.id,
-        plan_id=plan.id,
-        amount_invested=amount,
-        daily_roi_percent=plan.daily_roi_percent,   # snapshot
-        duration_days=plan.duration_days,           # snapshot
-        total_earned=Decimal("0.0"),
-        status="active",
-        start_date=now,
-        maturity_date=maturity,
+    inv = UserInvestment(
+        user_id=current_user.id, plan_id=plan.id, amount_invested=amount,
+        daily_roi_percent=plan.daily_roi_percent, duration_days=plan.duration_days,  # snapshot
+        total_earned=Decimal("0"), status="active", start_date=now,
+        maturity_date=now + timedelta(days=plan.duration_days), days_paid=0,
     )
-    db.add(investment)
-
-    tx = Transaction(
-        sender_wallet_id=main_wallet.id,
-        amount=amount,
-        currency=main_wallet.currency,
-        tx_type="investment",
-        description=f"Investment in plan: {plan.name}",
-        status="completed",
-    )
-    db.add(tx)
-
+    db.add(inv)
+    db.add(Transaction(sender_wallet_id=main.id, amount=amount, currency=settings.BASE_CURRENCY,
+                       tx_type="investment", status="completed", description=f"Invested in {plan.name}"))
     db.commit()
-    db.refresh(investment)
-
-    # Process referral milestone (first investment)
+    db.refresh(inv)
     process_referral_milestone(db, current_user, "first_investment", amount)
+    return _view(inv, plan.name)
 
-    return investment
 
-
-# ──────────────────────────────────────────────
-# GET /api/investments/my-investments — List caller's investments
-# ──────────────────────────────────────────────
 @router.get("/my-investments", response_model=List[UserInvestmentResponse])
-def my_investments(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Return all investments (active & historical) for the authenticated user."""
-    return (
-        db.query(UserInvestment)
-        .filter(UserInvestment.user_id == current_user.id)
-        .order_by(UserInvestment.created_at.desc())
-        .all()
-    )
+def my_investments(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows = (db.query(UserInvestment, InvestmentPlan.name)
+            .join(InvestmentPlan, InvestmentPlan.id == UserInvestment.plan_id)
+            .filter(UserInvestment.user_id == current_user.id)
+            .order_by(UserInvestment.created_at.desc()).all())
+    return [_view(i, name) for i, name in rows]

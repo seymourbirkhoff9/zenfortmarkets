@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 app/routers/leaderboard.py — Gamified leaderboard endpoints
 """
@@ -37,6 +38,7 @@ def referral_leaderboard(
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ):
     """Top users ranked by referral count and total referral earnings."""
     # Query users with referrals, ranked by referral_count then total_referral_earned
@@ -68,6 +70,7 @@ def investor_leaderboard(
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ):
     """Top users ranked by total active investment capital."""
     # Calculate total investment per user
@@ -111,6 +114,7 @@ def veteran_leaderboard(
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ):
     """Top users ranked by oldest account creation date."""
     users = (

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 app/services/email.py — Resend transactional email service
 """

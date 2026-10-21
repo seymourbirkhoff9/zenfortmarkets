@@ -1,0 +1,164 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Tokens ──────────────────────────────────────────────────────────── */
+@layer base {
+  :root {
+    color-scheme: light;
+    --paper: 245 247 249;     /* #F5F7F9 page */
+    --surface: 255 255 255;
+    --sunken: 236 240 244;
+    --ink: 20 36 59;          /* #14243B */
+    --muted: 88 102 122;
+    --line: 220 226 233;
+    --navy: 20 36 59;
+    --navy-fg: 255 255 255;
+    --brass: 168 120 31;      /* #A8781F — accent only, never body text on paper */
+    --settled: 46 122 85;
+    --rejected: 178 58 43;
+    --pending: 154 106 0;
+  }
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --paper: 13 22 35;
+    --surface: 21 33 51;
+    --sunken: 16 27 42;
+    --ink: 231 236 242;
+    --muted: 150 164 184;
+    --line: 41 56 79;
+    --navy: 214 168 78;       /* primary buttons turn brass on dark */
+    --navy-fg: 13 22 35;
+    --brass: 214 168 78;
+    --settled: 96 190 140;
+    --rejected: 240 128 110;
+    --pending: 230 180 80;
+  }
+
+  html { @apply bg-paper text-ink font-sans antialiased; text-rendering: optimizeLegibility; }
+  body { @apply min-h-screen text-base; }
+  h1, h2, h3 { @apply text-ink; text-wrap: balance; }
+  :focus-visible { outline: 2px solid rgb(var(--brass)); outline-offset: 2px; border-radius: 4px; }
+  ::selection { background: rgb(var(--brass) / 0.25); }
+  [hidden] { display: none !important; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+}
+
+/* ── Components ─────────────────────────────────────────────────────── */
+@layer components {
+  .figure { @apply font-serif; font-variant-numeric: tabular-nums lining-nums; letter-spacing: -0.01em; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded px-4 py-2 text-sm font-semibold
+           transition-colors disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap;
+  }
+  .btn-primary { @apply btn bg-navy text-navy-fg hover:opacity-90; }
+  .btn-quiet { @apply btn border border-line bg-surface text-ink hover:bg-sunken; }
+  .btn-danger { @apply btn bg-rejected text-white hover:opacity-90; }
+  .btn-link { @apply text-sm font-semibold text-ink underline decoration-brass decoration-2 underline-offset-4 hover:decoration-ink; }
+  .btn-sm { @apply px-3 py-1.5 text-xs; }
+
+  .field { @apply grid gap-1.5; }
+  .label { @apply text-sm font-medium text-ink; }
+  .hint { @apply text-xs text-muted; }
+  .input {
+    @apply w-full rounded border border-line bg-surface px-3 py-2 text-base text-ink placeholder:text-muted/70
+           focus:border-brass focus:outline-none focus:ring-2 focus:ring-brass/25;
+  }
+  .input[aria-invalid="true"] { @apply border-rejected; }
+  .error-text { @apply text-sm text-rejected; }
+
+  .panel { @apply rounded-lg border border-line bg-surface; }
+  .panel-head { @apply flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3.5; }
+  .panel-title { @apply text-base font-semibold; }
+
+  .table { @apply w-full text-left text-sm; }
+  .table th { @apply whitespace-nowrap border-b border-line px-4 py-2.5 text-xs font-semibold text-muted; }
+  .table td { @apply border-b border-line/70 px-4 py-3 align-top; }
+  .table td.figure, .table td .figure { @apply text-base; }
+  .table tr:last-child td { @apply border-b-0; }
+  .table tbody tr { @apply transition-colors; }
+  .table tbody tr[data-href] { @apply cursor-pointer hover:bg-sunken; }
+
+  .pill { @apply inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium; }
+  .pill::before { content: ''; @apply h-1.5 w-1.5 rounded-full bg-current; }
+  .pill-settled { @apply pill bg-settled/10 text-settled; }
+  .pill-pending { @apply pill bg-pending/10 text-pending; }
+  .pill-rejected { @apply pill bg-rejected/10 text-rejected; }
+  .pill-neutral { @apply pill bg-sunken text-muted; }
+
+  .nav-link {
+    @apply relative flex items-center gap-3 rounded px-3 py-2 text-sm font-medium text-muted hover:bg-sunken hover:text-ink;
+  }
+  .nav-link[aria-current="page"] { @apply bg-sunken text-ink; }
+  .nav-link[aria-current="page"]::before {
+    content: ''; @apply absolute -left-3 top-1.5 bottom-1.5 w-[3px] rounded-r bg-brass;
+  }
+  .badge { @apply ml-auto min-w-[1.4rem] rounded-full bg-pending/15 px-1.5 text-center text-xs font-semibold text-pending num; }
+
+  .skeleton { @apply animate-pulse rounded bg-sunken; }
+
+  /* <dialog> modal */
+  .modal { @apply m-auto w-[min(34rem,calc(100vw-2rem))] rounded-lg border border-line bg-surface p-0 text-ink shadow-2xl; }
+  .modal::backdrop { background: rgb(13 22 35 / 0.55); }
+  .modal[open] { animation: modal-in 160ms ease-out; }
+  @keyframes modal-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  .segmented { @apply inline-flex rounded border border-line bg-sunken p-0.5 text-sm; }
+  .segmented button { @apply rounded px-3 py-1.5 font-medium text-muted; }
+  .segmented button[aria-pressed="true"] { @apply bg-surface text-ink shadow-sm; }
+
+  .choice {
+    @apply flex cursor-pointer items-center gap-3 rounded border border-line bg-surface px-3 py-2.5 text-sm hover:border-muted;
+  }
+  .choice:has(input:checked) { @apply border-brass ring-1 ring-brass; }
+  .choice input { @apply sr-only; }
+
+  .copy-row { @apply flex items-center gap-2 rounded border border-line bg-sunken px-3 py-2 font-mono text-sm break-all; }
+}
+
+@keyframes zf-progress { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
+
+/* ── Phones: tables become stacked cards ─────────────────────────────
+   render() copies each column header into data-label on its cells
+   (src/lib/dom.js), so every table in the app gets this for free. */
+@media (max-width: 639px) {
+  .table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .table, .table tbody, .table tr, .table td { display: block; width: 100%; }
+  .table tr { border-bottom: 1px solid rgb(var(--line)); padding: 0.75rem 1rem; }
+  .table tbody tr:last-child { border-bottom: 0; }
+  .table td { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;
+              border: 0 !important; padding: 0.3rem 0 !important; text-align: right !important; }
+  .table td > * { min-width: 0; }
+  .table td[data-label]::before { content: attr(data-label); flex-shrink: 0; text-align: left;
+              font-size: 0.75rem; font-weight: 600; color: rgb(var(--muted)); padding-top: 0.15rem; }
+  .table td:not([data-label]) { justify-content: flex-end; }        /* action cells */
+  .table td:empty { display: none; }
+}
+
+/* ── Investment progress (admin Investments page) ── */
+.zf-bar { transition: width 1.3s cubic-bezier(.22, 1, .36, 1); }
+.zf-accruing { background-image: linear-gradient(90deg, transparent, rgb(var(--brass) / .55), transparent);
+               background-size: 200% 100%; animation: zf-accrue 2.4s linear infinite; }
+@keyframes zf-accrue { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .zf-bar { transition: none; } .zf-accruing { animation: none; } }
+
+/* ── Public site ── */
+/* Ledger-paper texture: faint horizontal rules, like an account book. */
+.ledger-bg { background-image: repeating-linear-gradient(to bottom, transparent 0 31px, rgb(var(--line) / .55) 31px 32px); }
+[data-reveal] { opacity: 0; transform: translateY(14px); transition: opacity .7s ease, transform .7s cubic-bezier(.22,1,.36,1); }
+[data-reveal].is-visible { opacity: 1; transform: none; }
+[data-reveal-delay="1"] { transition-delay: .08s; } [data-reveal-delay="2"] { transition-delay: .16s; } [data-reveal-delay="3"] { transition-delay: .24s; }
+@media (prefers-reduced-motion: reduce) { [data-reveal] { opacity: 1; transform: none; transition: none; } }
+
+/* Hero statement: rows arrive, a pending deposit settles, the balance moves. */
+.st-row { opacity: 0; transform: translateY(8px); transition: opacity .5s ease, transform .5s cubic-bezier(.22,1,.36,1); }
+.st-row.in { opacity: 1; transform: none; }
+.st-flash { animation: st-flash 1.2s ease; }
+@keyframes st-flash { 0% { background: rgb(var(--brass) / .18); } 100% { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .st-row { opacity: 1; transform: none; transition: none; } .st-flash { animation: none; } }
+@media print { [data-reveal], .st-row { opacity: 1 !important; transform: none !important; } }
