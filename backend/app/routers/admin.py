@@ -9,17 +9,17 @@ Every state change that touches money or a user's standing:
 """
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, field_validator, ValidationError
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
 from app.models import (
-    AuditLog, InvestmentPlan, KYCStatus, PaymentMethod, Transaction, User, UserInvestment, Wallet,
+    AuditLog, FxRate, InvestmentPlan, KYCStatus, PaymentMethod, Transaction, User, UserInvestment, Wallet,
 )
 from app.schemas import (
     AdminCreditRequest, AdminDebitRequest, AdminDepositReviewRequest, AdminKYCReviewRequest,
@@ -56,7 +56,7 @@ _CTA = {"deposit": "#/wallet", "withdrawal": "#/wallet?tab=withdrawal", "kyc": "
 
 
 def _notify(db: Session, user: User, title: str, message: str, kind: str,
-            extra: list[str] | None = None, rows: list[tuple[str, str]] | None = None):
+            extra: Optional[List[str]] = None, rows: Optional[List[Tuple[str, str]]] = None):
     """In-app notification + branded email. `rows` become the email's details table."""
     link = f"{settings.FRONTEND_URL.rstrip('/')}/app.html{_CTA.get(kind, '#/')}"
     send_notification_and_email(
@@ -84,7 +84,7 @@ def _owner_of(db: Session, tx: Transaction) -> Optional[User]:
     return db.query(User).join(Wallet, Wallet.user_id == User.id).filter(Wallet.id == wallet_id).first()
 
 
-def _with_owners(db: Session, txs: list[Transaction]) -> list[dict]:
+def _with_owners(db: Session, txs: List[Transaction]) -> List[dict]:
     wallet_ids = {w for t in txs for w in (t.sender_wallet_id, t.receiver_wallet_id) if w}
     owners = dict(db.query(Wallet.id, User).join(User, User.id == Wallet.user_id)
                   .filter(Wallet.id.in_(wallet_ids)).all()) if wallet_ids else {}
@@ -716,3 +716,129 @@ def list_audit_logs(skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le
     return [{"id": r.id, "admin_id": r.admin_id, "admin_email": emails.get(r.admin_id), "action": r.action,
              "target_user_id": r.target_user_id, "target_email": emails.get(r.target_user_id),
              "details": r.details, "created_at": r.created_at} for r in rows]
+
+
+# ── FX Rate Management ─────────────────────────
+from app.services.fx_service import effective_rate, seed_default_rates
+
+
+class AdminFxRateOut(BaseModel):
+    currency: str
+    rate_per_usd: Optional[Decimal]  # Raw API rate
+    override_rate: Optional[Decimal]  # Admin override
+    is_enabled: bool
+    source: Optional[str]
+    updated_at: Optional[str]
+
+
+class AdminFxRateUpdate(BaseModel):
+    is_enabled: Optional[bool] = None
+    override_rate: Optional[Decimal] = None
+
+    @field_validator("override_rate")
+    @classmethod
+    def override_rate_valid(cls, v: Optional[Decimal]) -> Optional[Decimal]:
+        if v is not None:
+            if v.is_nan() or v.is_infinite():
+                raise ValueError("Override rate must be a finite number.")
+            if v <= 0:
+                raise ValueError("Override rate must be positive.")
+            if v > Decimal("1e9"):
+                raise ValueError("Override rate must not exceed 1,000,000,000.")
+        return v
+
+
+@router.get("/fx/rates", response_model=List[AdminFxRateOut])
+def get_admin_fx_rates(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    """List all FX rate rows (including disabled ones) with raw and override rates."""
+    rows = db.query(FxRate).order_by(FxRate.currency).all()
+
+    return [
+        AdminFxRateOut(
+            currency=row.currency,
+            rate_per_usd=row.rate_per_usd,
+            override_rate=row.override_rate,
+            is_enabled=row.is_enabled,
+            source=row.source,
+            updated_at=row.updated_at.isoformat() if row.updated_at else None
+        )
+        for row in rows
+    ]
+
+
+@router.patch("/fx/rates/{currency}", response_model=AdminFxRateOut)
+def update_fx_rate(
+    currency: str,
+    payload: AdminFxRateUpdate,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Update is_enabled or override_rate for a specific currency."""
+    currency = currency.upper().strip()
+
+    # Validate currency format
+    if not (3 <= len(currency) <= 10) or not currency.isalpha():
+        raise HTTPException(status_code=422, detail="Currency must be 3-10 uppercase letters.")
+
+    row = db.query(FxRate).filter(FxRate.currency == currency).first()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Currency {currency} not found.")
+
+    # Capture old values for audit log
+    old_override = row.override_rate
+    old_enabled = row.is_enabled
+
+    if payload.is_enabled is not None:
+        row.is_enabled = payload.is_enabled
+
+    if payload.override_rate is not None:
+        row.override_rate = payload.override_rate
+    elif payload.override_rate is None and "override_rate" in payload.model_fields_set:
+        # Explicitly set to None to clear override
+        row.override_rate = None
+
+    # Log the change with old and new values BEFORE commit
+    _audit(db, admin, "UPDATE_FX_RATE", None,
+           f"Updated FX rate for {currency}: enabled={old_enabled}->{row.is_enabled}, override={old_override}->{row.override_rate}")
+
+    # Single atomic commit for both the change and its audit entry
+    db.commit()
+    db.refresh(row)
+
+    return AdminFxRateOut(
+        currency=row.currency,
+        rate_per_usd=row.rate_per_usd,
+        override_rate=row.override_rate,
+        is_enabled=row.is_enabled,
+        source=row.source,
+        updated_at=row.updated_at.isoformat() if row.updated_at else None
+    )
+
+
+@router.post("/fx/refresh")
+def refresh_fx_rates(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Manually trigger a rate refresh from the external API.
+    
+    Note: refresh_rates commits the rate updates before the audit row is added.
+    """
+    from app.services.fx_service import refresh_rates
+
+    success = refresh_rates(db)
+
+    # Clear failure timestamp on manual success (matches ensure_fresh behavior)
+    if success:
+        import app.services.fx_service as fx_module
+        fx_module._last_failure_time = None
+
+    # Log the refresh action BEFORE commit
+    _audit(db, admin, "REFRESH_FX", None,
+           f"Manual FX rate refresh: {'success' if success else 'failed'}")
+
+    # Single atomic commit for both the action and its audit entry
+    db.commit()
+
+    if success:
+        return {"status": "success", "message": "Rates refreshed successfully."}
+    else:
+        return {"status": "failed", "message": "Failed to refresh rates. Old values kept."}

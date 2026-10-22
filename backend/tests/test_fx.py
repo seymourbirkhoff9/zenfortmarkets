@@ -5,22 +5,58 @@ Mocked HTTP fetch for external API calls.
 """
 import uuid
 from decimal import Decimal
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 
 from app.database import SessionLocal
 from app.models import FxRate, Transaction, User, Wallet
+from app.config import settings
+
+
+@pytest.fixture(scope="function", autouse=True)
+def fx_db_cleanup(db_session):
+    """Clear fx_rates table before and after each test. Depends on db_session so guard runs first."""
+    import app.services.fx_service as fx_module
+    
+    # Reset failure timestamp
+    fx_module._last_failure_time = None
+    
+    # Clear fx_rates before test
+    db_session.query(FxRate).delete()
+    db_session.commit()
+    
+    yield
+    
+    # Clear fx_rates after test
+    db_session.query(FxRate).delete()
+    db_session.commit()
+    
+    # Reset failure timestamp
+    fx_module._last_failure_time = None
+
+
+@pytest.fixture(scope="function", autouse=True)
+def fx_isolation():
+    """Set up FX service isolation for each test."""
+    import app.services.fx_service as fx_module
+    # Patch requests.get to raise ConnectionError by default
+    with patch("app.services.fx_service.requests.get") as mock_get:
+        mock_get.side_effect = Exception("Network blocked by test fixture")
+        yield
 
 
 @pytest.fixture()
 def fx_rates(db_session):
     """Seed FX rates for testing."""
     db = db_session
+    now = datetime.now(timezone.utc)
     # Add some test currencies
-    db.add(FxRate(currency="USD", rate_per_usd=Decimal("1.0"), is_enabled=True, source="test", updated_at=None))
-    db.add(FxRate(currency="EUR", rate_per_usd=Decimal("0.92"), is_enabled=True, source="test", updated_at=None))
-    db.add(FxRate(currency="NGN", rate_per_usd=Decimal("1550.5"), is_enabled=True, source="test", updated_at=None))
+    db.add(FxRate(currency="USD", rate_per_usd=Decimal("1.0"), is_enabled=True, source="test", updated_at=now))
+    db.add(FxRate(currency="EUR", rate_per_usd=Decimal("0.92"), is_enabled=True, source="test", updated_at=now))
+    db.add(FxRate(currency="NGN", rate_per_usd=Decimal("1550.5"), is_enabled=True, source="test", updated_at=now))
     db.add(FxRate(currency="GBP", rate_per_usd=Decimal("0.79"), is_enabled=False, source="test", updated_at=None))  # Disabled
     db.add(FxRate(currency="JPY", rate_per_usd=None, is_enabled=True, source="test", updated_at=None))  # No rate
     db.commit()
@@ -30,6 +66,12 @@ def fx_rates(db_session):
 @pytest.fixture()
 def db_session():
     """Provide a database session for tests."""
+    # Guard: refuse to run against non-local database
+    from app.config import settings
+    db_url = settings.DATABASE_URL
+    if "localhost" not in db_url and "127.0.0.1" not in db_url:
+        pytest.fail("Refusing to run: DATABASE_URL does not point at a local database")
+
     db = SessionLocal()
     try:
         yield db
@@ -116,13 +158,13 @@ def test_deposit_with_input_currency(client, make_user, method, db_session, fx_r
     tx = r.json()
 
     # Verify input_* fields are stored
-    assert tx["input_amount"] == Decimal("100")
+    assert Decimal(tx["input_amount"]) == Decimal("100")
     assert tx["input_currency"] == "EUR"
-    assert tx["fx_rate"] is not None
+    assert Decimal(tx["fx_rate"]) == Decimal("0.92")
 
     # Verify ledger amount is in USD (converted)
     assert tx["currency"] == "USD"
-    assert tx["amount"] == Decimal("108.70")  # 100 EUR / 0.92 = 108.70 USD
+    assert Decimal(tx["amount"]) == Decimal("108.70")  # 100 EUR / 0.92 = 108.70 USD
 
     # Verify wallet balance is in USD
     wallets = client.get("/api/wallets/", headers=user["h"]).json()
@@ -151,29 +193,22 @@ def test_deposit_without_input_currency(client, make_user, method, db_session, f
 
     # Verify ledger amount is in USD
     assert tx["currency"] == "USD"
-    assert tx["amount"] == Decimal("100.00")
+    assert Decimal(tx["amount"]) == Decimal("100.00")
 
 
-def test_withdrawal_with_input_currency(client, make_user, method, db_session, fx_rates):
+def test_withdrawal_with_input_currency(client, make_user, method, db_session, fx_rates, monkeypatch):
     """Test withdrawal with input_currency converts to USD before debit."""
     db = fx_rates
     user = make_user()
 
-    # First, credit the user's wallet (admin credit)
-    admin_email = f"admin-{uuid.uuid4().hex[:8]}@test.dev"
-    db = SessionLocal()
-    admin = User(email=admin_email, full_name="Admin", hashed_password="x", is_active=True, is_admin=True, referral_code="ADMIN")
-    db.add(admin)
-    db.commit()
-    admin_id = admin.id
-    db.close()
+    # Bypass KYC requirement for test
+    monkeypatch.setattr(settings, "REQUIRE_KYC_FOR_WITHDRAWAL", False)
 
     # Get user's main wallet
     wallets = client.get("/api/wallets/", headers=user["h"]).json()
     main_wallet_id = next(w["id"] for w in wallets if w["wallet_type"] == "main")
 
-    # Admin credit to give user funds
-    # Note: This would normally be done via admin endpoint, but we'll directly manipulate DB for test
+    # Credit the user's wallet directly for test
     db = SessionLocal()
     wallet = db.query(Wallet).filter(Wallet.id == main_wallet_id).first()
     wallet.balance = Decimal("200.00")
@@ -191,18 +226,60 @@ def test_withdrawal_with_input_currency(client, make_user, method, db_session, f
     tx = r.json()
 
     # Verify input_* fields are stored
-    assert tx["input_amount"] == Decimal("50")
+    assert Decimal(tx["input_amount"]) == Decimal("50")
     assert tx["input_currency"] == "EUR"
-    assert tx["fx_rate"] is not None
+    assert Decimal(tx["fx_rate"]) == Decimal("0.92")
 
     # Verify ledger amount is in USD (converted)
     assert tx["currency"] == "USD"
-    assert tx["amount"] == Decimal("54.35")  # 50 EUR / 0.92 = 54.35 USD (rounded)
+    assert Decimal(tx["amount"]) == Decimal("54.35")  # 50 EUR / 0.92 = 54.35 USD (rounded)
 
-    # Verify wallet was debited in USD
+    # Verify wallet was debited in USD by re-reading from DB
+    db = SessionLocal()
+    wallet = db.query(Wallet).filter(Wallet.id == main_wallet_id).first()
+    assert wallet.balance == Decimal("200.00") - Decimal("54.35")
+    db.close()
+
+
+def test_deposit_without_trailing_slash(client, make_user, method, db_session, fx_rates):
+    """Test deposit route without trailing slash works."""
+    user = make_user()
+
+    # Create a deposit with EUR input (no trailing slash)
+    r = client.post("/api/wallets/deposits", headers=user["h"], json={
+        "payment_method_id": method["id"],
+        "amount": "100",
+        "input_currency": "EUR",
+        "tx_hash": f"tx-{uuid.uuid4().hex[:16]}",
+    })
+    assert r.status_code == 201, r.text
+
+
+def test_withdrawal_without_trailing_slash(client, make_user, method, db_session, fx_rates, monkeypatch):
+    """Test withdrawal route without trailing slash works with USD only."""
+    user = make_user()
+
+    # Bypass KYC requirement for test
+    monkeypatch.setattr(settings, "REQUIRE_KYC_FOR_WITHDRAWAL", False)
+
+    # Get user's main wallet
     wallets = client.get("/api/wallets/", headers=user["h"]).json()
-    main_wallet = next(w for w in wallets if w["wallet_type"] == "main")
-    assert main_wallet["balance"] == Decimal("145.65")  # 200 - 54.35
+    main_wallet_id = next(w["id"] for w in wallets if w["wallet_type"] == "main")
+
+    # Credit the user's wallet directly for test
+    db = SessionLocal()
+    wallet = db.query(Wallet).filter(Wallet.id == main_wallet_id).first()
+    wallet.balance = Decimal("100.00")
+    db.commit()
+    db.close()
+
+    # Create withdrawal with USD only (no input_currency, no trailing slash)
+    r = client.post("/api/wallets/withdrawals", headers=user["h"], json={
+        "payment_method_id": method["id"],
+        "amount": "50",
+        "withdrawal_address": "T" + "x" * 40,
+    })
+    assert r.status_code == 201, r.text
 
 
 def test_signup_derives_display_currency(client, db_session):
@@ -435,3 +512,347 @@ def test_invalid_currency_path_param(client, admin, fx_rates):
     # Valid currency (lowercase should work, gets uppercased)
     r = client.patch("/api/admin/fx/rates/eur", headers=admin, json={"is_enabled": False})
     assert r.status_code in (200, 404)  # 404 if EUR doesn't exist in test DB
+
+
+def test_to_usd_seeds_and_refreshes_on_empty_table(db_session, monkeypatch):
+    """Test that to_usd with an empty fx_rates table seeds defaults and refreshes before converting."""
+    from app.services.fx_service import to_usd, seed_default_rates, refresh_rates
+    from datetime import datetime, timezone, timedelta
+
+    db = db_session
+
+    # Mock refresh_rates to succeed and set updated_at
+    def mock_refresh(db):
+        # Set some rates with recent timestamps
+        for row in db.query(FxRate).all():
+            if row.currency == "EUR":
+                row.rate_per_usd = Decimal("0.92")
+                row.updated_at = datetime.now(timezone.utc)
+            elif row.currency == "USD":
+                row.rate_per_usd = Decimal("1.0")
+                row.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        return True
+
+    # Patch refresh_rates
+    import app.services.fx_service as fx_module
+    monkeypatch.setattr(fx_module, "refresh_rates", mock_refresh)
+
+    # Call to_usd - should seed and refresh automatically
+    usd_amount, rate = to_usd(db, Decimal("100"), "EUR")
+    assert usd_amount == Decimal("108.70")
+    assert rate == Decimal("0.92")
+
+    # Verify defaults were seeded
+    rows = db.query(FxRate).all()
+    assert len(rows) == 11  # DEFAULT_CURRENCIES has 11 items
+
+
+def test_rate_expiry_72_hours(db_session):
+    """Test that a rate older than 72 hours is rejected with 422."""
+    from app.services.fx_service import to_usd
+    from datetime import datetime, timezone, timedelta
+
+    db = db_session
+
+    # Create a EUR rate that's 100 hours old
+    old_time = datetime.now(timezone.utc) - timedelta(hours=100)
+
+    eur = FxRate(
+        currency="EUR",
+        rate_per_usd=Decimal("0.92"),
+        is_enabled=True,
+        source="test",
+        updated_at=old_time
+    )
+    db.add(eur)
+    db.commit()
+
+    # Should be rejected due to expiry
+    with pytest.raises(HTTPException) as exc:
+        to_usd(db, Decimal("100"), "EUR")
+    assert exc.value.status_code == 422
+    assert "isn't available right now" in exc.value.detail
+
+
+def test_override_rate_no_expiry(db_session):
+    """Test that an override_rate older than 72 hours is still accepted."""
+    from app.services.fx_service import to_usd
+    from datetime import datetime, timezone, timedelta
+
+    db = db_session
+
+    # Create a EUR rate with an old override
+    old_time = datetime.now(timezone.utc) - timedelta(hours=100)
+
+    eur = FxRate(
+        currency="EUR",
+        rate_per_usd=Decimal("0.92"),
+        override_rate=Decimal("0.95"),  # Override is old but should still work
+        is_enabled=True,
+        source="test",
+        updated_at=old_time
+    )
+    db.add(eur)
+    db.commit()
+
+    # Should succeed because override_rate is set
+    usd_amount, rate = to_usd(db, Decimal("100"), "EUR")
+    assert usd_amount == Decimal("105.26")  # 100 / 0.95
+    assert rate == Decimal("0.95")
+
+
+def test_ensure_fresh_failure_backoff(db_session, monkeypatch):
+    """Test that ensure_fresh does not fetch a second time within 15 minutes of a failure."""
+    from app.services.fx_service import ensure_fresh
+    from datetime import datetime, timezone, timedelta
+
+    db = db_session
+
+    # Mock refresh_rates to fail
+    import app.services.fx_service as fx_module
+
+    call_count = [0]
+    def mock_refresh(db):
+        call_count[0] += 1
+        return False
+
+    monkeypatch.setattr(fx_module, "refresh_rates", mock_refresh)
+
+    # First call - should attempt refresh and fail
+    ensure_fresh(db)
+    assert call_count[0] == 1, "refresh_rates should be called on first ensure_fresh"
+    assert fx_module._last_failure_time is not None
+
+    # Set failure time to 1 minute ago (within backoff window)
+    fx_module._last_failure_time = datetime.now(timezone.utc) - timedelta(minutes=1)
+
+    # Second call - should skip due to backoff
+    ensure_fresh(db)
+    assert call_count[0] == 1  # No additional call
+
+    # Set failure time to 20 minutes ago (outside backoff window)
+    fx_module._last_failure_time = datetime.now(timezone.utc) - timedelta(minutes=20)
+
+    # Third call - should attempt refresh again
+    ensure_fresh(db)
+    assert call_count[0] == 2
+
+    # Mock success to test timestamp clearing
+    def mock_refresh_success(db):
+        call_count[0] += 1
+        return True
+    monkeypatch.setattr(fx_module, "refresh_rates", mock_refresh_success)
+    fx_module._last_failure_time = datetime.now(timezone.utc) - timedelta(minutes=30)
+
+    # Fourth call - should succeed and clear timestamp
+    ensure_fresh(db)
+    assert call_count[0] == 3
+    assert fx_module._last_failure_time is None  # Cleared on success
+
+
+def test_seed_default_rates_race_safe(db_session):
+    """Test that seed_default_rates called twice does not raise and leaves one row per currency."""
+    from app.services.fx_service import seed_default_rates
+
+    db = db_session
+
+    # Ensure table is empty
+    db.query(FxRate).delete()
+    db.commit()
+
+    # First call
+    seed_default_rates(db)
+    rows_after_first = db.query(FxRate).all()
+    assert len(rows_after_first) == 11  # DEFAULT_CURRENCIES
+
+    # Second call - should not raise or duplicate
+    seed_default_rates(db)
+    rows_after_second = db.query(FxRate).all()
+    assert len(rows_after_second) == 11  # Still 11, no duplicates
+
+
+def test_seed_default_rates_no_insert_when_rows_exist(db_session):
+    """Test that seed_default_rates makes no insert when rows already exist."""
+    from app.services.fx_service import seed_default_rates
+
+    db = db_session
+
+    # Add a single row
+    db.add(FxRate(currency="USD", rate_per_usd=Decimal("1.0"), is_enabled=True, source="test", updated_at=None))
+    db.commit()
+
+    initial_count = db.query(FxRate).count()
+
+    # Call seed_default_rates - should return immediately without inserting
+    seed_default_rates(db)
+
+    final_count = db.query(FxRate).count()
+    assert final_count == initial_count  # No new rows added
+
+
+def test_get_rates_filters_unusable(client, make_user, db_session):
+    """Test GET /rates omits currencies with no rate, old rate (no override), but keeps override and USDT."""
+    from datetime import datetime, timezone, timedelta
+
+    db = db_session
+    user = make_user()
+
+    # Clear existing rates
+    db.query(FxRate).delete()
+    db.commit()
+
+    now = datetime.now(timezone.utc)
+    old_time = now - timedelta(hours=100)
+
+    # Currency with no rate
+    db.add(FxRate(currency="JPY", rate_per_usd=None, is_enabled=True, source="test", updated_at=None))
+    # Currency with old rate (no override) - should be omitted
+    db.add(FxRate(currency="EUR", rate_per_usd=Decimal("0.92"), is_enabled=True, source="test", updated_at=old_time))
+    # Currency with old override - should be included
+    db.add(FxRate(currency="GBP", rate_per_usd=Decimal("0.79"), override_rate=Decimal("0.80"), is_enabled=True, source="test", updated_at=old_time))
+    # USDT with old rate - should be included (stablecoin)
+    db.add(FxRate(currency="USDT", rate_per_usd=Decimal("1.0"), is_enabled=True, source="test", updated_at=old_time))
+    # USD with recent rate - should be included
+    db.add(FxRate(currency="USD", rate_per_usd=Decimal("1.0"), is_enabled=True, source="test", updated_at=now))
+    db.commit()
+
+    r = client.get("/api/fx/rates", headers=user["h"])
+    assert r.status_code == 200, r.text
+    data = r.json()
+
+    rate_currencies = [r["currency"] for r in data["rates"]]
+
+    assert "JPY" not in rate_currencies  # No rate
+    assert "EUR" not in rate_currencies  # Old rate, no override
+    assert "GBP" in rate_currencies  # Has override
+    assert "USDT" in rate_currencies  # Stablecoin
+    assert "USD" in rate_currencies  # Recent rate
+
+
+def test_to_usd_decimal_and_amount_validation(db_session):
+    """Test to_usd rejects amounts with >2 decimal places and amounts > 1e9 for non-USD currencies."""
+    from app.services.fx_service import to_usd
+
+    db = db_session
+
+    # Add EUR rate
+    db.add(FxRate(currency="EUR", rate_per_usd=Decimal("0.92"), is_enabled=True, source="test", updated_at=None))
+    db.commit()
+
+    # More than 2 decimal places
+    with pytest.raises(HTTPException) as exc:
+        to_usd(db, Decimal("100.123"), "EUR")
+    assert exc.value.status_code == 422
+    assert "at most 2 decimal places" in exc.value.detail
+
+    # Amount too large
+    with pytest.raises(HTTPException) as exc:
+        to_usd(db, Decimal("2000000000"), "EUR")
+    assert exc.value.status_code == 422
+    assert "too large" in exc.value.detail
+
+    # USD should bypass these validations
+    usd_amount, rate = to_usd(db, Decimal("100.123456"), "USD")
+    assert usd_amount == Decimal("100.12")  # Rounded to 2 dp
+
+    usd_amount, rate = to_usd(db, Decimal("2000000000"), "USD")
+    assert usd_amount == Decimal("2000000000.00")
+
+
+def test_to_usd_rejects_non_finite_amounts(db_session):
+    """Test to_usd rejects NaN and Infinity with 422."""
+    from app.services.fx_service import to_usd
+
+    db = db_session
+
+    # Add EUR rate
+    db.add(FxRate(currency="EUR", rate_per_usd=Decimal("0.92"), is_enabled=True, source="test", updated_at=None))
+    db.commit()
+
+    # NaN
+    with pytest.raises(HTTPException) as exc:
+        to_usd(db, Decimal("NaN"), "EUR")
+    assert exc.value.status_code == 422
+    assert "valid amount" in exc.value.detail
+
+    # Infinity
+    with pytest.raises(HTTPException) as exc:
+        to_usd(db, Decimal("Infinity"), "EUR")
+    assert exc.value.status_code == 422
+    assert "valid amount" in exc.value.detail
+
+    # Negative Infinity
+    with pytest.raises(HTTPException) as exc:
+        to_usd(db, Decimal("-Infinity"), "EUR")
+    assert exc.value.status_code == 422
+    assert "valid amount" in exc.value.detail
+
+
+def test_signup_resilient_to_country_currency_error(client, db_session, monkeypatch):
+    """Test signup returns 200 and display_currency USD when get_currency_for_country fails."""
+    email = f"user-{uuid.uuid4().hex[:8]}@test.dev"
+    
+    # Monkeypatch get_currency_for_country to raise ModuleNotFoundError
+    import app.utils.country_currency as cc_module
+    monkeypatch.setattr(cc_module, "get_currency_for_country", lambda country: (_ for _ in ()).throw(ModuleNotFoundError("pycountry not found")))
+    
+    r = client.post("/api/auth/signup", json={
+        "full_name": "Test User",
+        "email": email,
+        "password": "User-pass-1",
+        "confirm_password": "User-pass-1",
+        "country": "Nigeria",
+        "accept_terms": True
+    })
+    assert r.status_code == 201, r.text
+    user_data = r.json()
+
+    # Verify display_currency falls back to USD
+    assert user_data["display_currency"] == "USD"
+
+
+def test_signup_validates_display_currency_format(client, db_session):
+    """Test signup validates client-supplied display_currency as 3-10 uppercase letters."""
+    email = f"user-{uuid.uuid4().hex[:8]}@test.dev"
+    
+    # Too short
+    r = client.post("/api/auth/signup", json={
+        "full_name": "Test User",
+        "email": email,
+        "password": "User-pass-1",
+        "confirm_password": "User-pass-1",
+        "country": "Nigeria",
+        "display_currency": "US",  # Too short
+        "accept_terms": True
+    })
+    assert r.status_code == 422, r.text
+    assert "display_currency must be 3-10 uppercase letters" in r.text
+    
+    # Too long
+    email = f"user-{uuid.uuid4().hex[:8]}@test.dev"
+    r = client.post("/api/auth/signup", json={
+        "full_name": "Test User",
+        "email": email,
+        "password": "User-pass-1",
+        "confirm_password": "User-pass-1",
+        "country": "Nigeria",
+        "display_currency": "ABCDEFGHIJK",  # Too long
+        "accept_terms": True
+    })
+    assert r.status_code == 422, r.text
+    assert "display_currency must be 3-10 uppercase letters" in r.text
+    
+    # Contains numbers
+    email = f"user-{uuid.uuid4().hex[:8]}@test.dev"
+    r = client.post("/api/auth/signup", json={
+        "full_name": "Test User",
+        "email": email,
+        "password": "User-pass-1",
+        "confirm_password": "User-pass-1",
+        "country": "Nigeria",
+        "display_currency": "EUR1",  # Contains number
+        "accept_terms": True
+    })
+    assert r.status_code == 422, r.text
+    assert "display_currency must be 3-10 uppercase letters" in r.text

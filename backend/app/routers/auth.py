@@ -7,6 +7,7 @@ import string
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from jose import JWTError, jwt
@@ -71,11 +72,19 @@ def signup(payload: SignUpRequest, db: Session = Depends(get_db)):
     # Derive display_currency from country if not provided
     display_currency = None
     if payload.display_currency:
-        display_currency = payload.display_currency.upper().strip()[:10]
+        display_currency = payload.display_currency.upper().strip()
+        # Validate client-supplied display_currency: 3-10 uppercase letters
+        if not (3 <= len(display_currency) <= 10) or not display_currency.isalpha():
+            raise HTTPException(status_code=422, detail="display_currency must be 3-10 uppercase letters.")
     else:
-        from app.utils.country_currency import get_currency_for_country
-        country_str = payload.country.value if hasattr(payload.country, "value") else payload.country
-        display_currency = get_currency_for_country(country_str)
+        try:
+            from app.utils.country_currency import get_currency_for_country
+            country_str = payload.country.value if hasattr(payload.country, "value") else payload.country
+            display_currency = get_currency_for_country(country_str)
+        except Exception as e:
+            import logging
+            logging.getLogger("zenfort.auth").warning(f"Failed to derive display_currency from country {payload.country}: {e}")
+            display_currency = "USD"
 
     user = User(
         email=email, full_name=payload.full_name.strip(), hashed_password=hash_password(payload.password),
@@ -230,9 +239,9 @@ def resend_verification(current_user: User = Depends(get_current_user)):
 
 # ── Profile ───────────────────────────────────
 class ProfileUpdate(BaseModel):
-    full_name: str | None = None
-    phone: str | None = None
-    display_currency: str | None = None  # User's preferred display currency (3-10 uppercase letters)
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+    display_currency: Optional[str] = None  # User's preferred display currency (3-10 uppercase letters)
 
     @field_validator("full_name")
     @classmethod
