@@ -116,6 +116,7 @@ class SignUpRequest(BaseModel):
     country: CountryEnum              # Swagger renders this as a dropdown (JSON body)
     phone: Optional[str] = None
     referral_code: Optional[str] = None
+    display_currency: Optional[str] = None  # User's preferred display currency (e.g., "EUR")
     # Must be True: the user ticked "I agree to the Terms and Privacy Policy".
     # validate_default: an OMITTED field must fail too (Pydantic skips validators on defaults otherwise).
     accept_terms: bool = Field(default=False, validate_default=True)
@@ -191,6 +192,7 @@ class UserOut(BaseModel):
     terms_version: Optional[str] = None
     terms_accepted_at: Optional[datetime] = None
     totp_enabled: bool = False
+    display_currency: Optional[str] = None    # User's preferred display currency
 
     @field_validator("avatar_url")
     @classmethod
@@ -277,6 +279,10 @@ class TransactionOut(BaseModel):
     payout_tx_hash: Optional[str] = None
     rejection_reason: Optional[str] = None
     reviewed_at: Optional[datetime] = None
+    # Multi-currency input tracking
+    input_amount: Optional[Decimal] = None
+    input_currency: Optional[str] = None
+    fx_rate: Optional[Decimal] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -553,9 +559,10 @@ class KYCSubmitRequest(BaseModel):
 
 
 class DepositCreateRequest(BaseModel):
-    """Amount is the USD value the user sent. Crypto is only the payment rail."""
+    """Amount is the USD value the user sent (if input_currency is null/USD). If input_currency is set, amount is in that currency and will be converted to USD."""
     payment_method_id: uuid.UUID
     amount: Decimal
+    input_currency: Optional[str] = None  # If set, amount is in this currency (e.g., "EUR")
     tx_hash: Optional[str] = None
     proof_image_url: Optional[str] = None
 
@@ -583,7 +590,8 @@ class AdminDepositReviewRequest(BaseModel):
 # ──────────────────────────────────────────────
 class WithdrawalCreateRequest(BaseModel):
     payment_method_id: uuid.UUID
-    amount: Decimal                          # USD amount debited from the Main wallet
+    amount: Decimal                          # USD amount debited from the Main wallet (if input_currency is null/USD). If input_currency is set, amount is in that currency and will be converted to USD.
+    input_currency: Optional[str] = None  # If set, amount is in this currency (e.g., "EUR")
     withdrawal_address: str
     withdrawal_details: Optional[str] = None  # memo/tag or notes for the admin
 

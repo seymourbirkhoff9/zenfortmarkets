@@ -43,6 +43,7 @@ def _require_not_blocked(user: User) -> None:
 
 
 # ── Balances ──────────────────────────────────
+@router.get("", response_model=List[WalletOut])
 @router.get("/", response_model=List[WalletOut])
 def list_wallets(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return (db.query(Wallet).filter(Wallet.user_id == current_user.id)
@@ -180,6 +181,7 @@ def _get_method(db: Session, method_id) -> PaymentMethod:
     return m
 
 
+@router.post("/deposits", response_model=TransactionOut, status_code=201)
 @router.post("/deposits/", response_model=TransactionOut, status_code=201)
 def create_deposit(payload: DepositCreateRequest,
                    current_user: User = Depends(get_current_user),
@@ -192,7 +194,19 @@ def create_deposit(payload: DepositCreateRequest,
     if not method.deposit_enabled:
         raise HTTPException(status_code=400, detail=f"Deposits via {method.asset} ({method.network}) are paused.")
 
-    amount = money(payload.amount)
+    # Handle currency conversion if input_currency is provided
+    input_amount = None
+    input_currency = None
+    fx_rate = None
+
+    if payload.input_currency and payload.input_currency.upper() != "USD":
+        from app.services.fx_service import to_usd
+        input_amount = payload.amount
+        input_currency = payload.input_currency.upper().strip()
+        amount, fx_rate = to_usd(db, input_amount, input_currency)
+    else:
+        amount = money(payload.amount)
+
     if amount <= 0:
         raise HTTPException(status_code=422, detail="Amount must be positive.")
     if amount < money(method.min_deposit):
@@ -219,6 +233,7 @@ def create_deposit(payload: DepositCreateRequest,
         receiver_wallet_id=main.id, amount=amount, currency=CUR, tx_type="deposit", status="pending",
         description=f"Deposit via {label}", gateway_name=label, asset=method.asset,
         network=method.network, payment_method_id=method.id, tx_hash=tx_hash, proof_image_url=proof,
+        input_amount=input_amount, input_currency=input_currency, fx_rate=fx_rate,
     )
     db.add(tx)
     notify_admins(db, "Deposit awaiting review",
@@ -229,6 +244,7 @@ def create_deposit(payload: DepositCreateRequest,
 
 
 # ── Withdrawals ───────────────────────────────
+@router.post("/withdrawals", response_model=TransactionOut, status_code=201)
 @router.post("/withdrawals/", response_model=TransactionOut, status_code=201)
 def create_withdrawal(payload: WithdrawalCreateRequest,
                       current_user: User = Depends(get_current_user),
@@ -249,7 +265,19 @@ def create_withdrawal(payload: WithdrawalCreateRequest,
     if not method.withdraw_enabled:
         raise HTTPException(status_code=400, detail=f"Withdrawals via {method.asset} ({method.network}) are paused.")
 
-    amount = money(payload.amount)
+    # Handle currency conversion if input_currency is provided
+    input_amount = None
+    input_currency = None
+    fx_rate = None
+
+    if payload.input_currency and payload.input_currency.upper() != "USD":
+        from app.services.fx_service import to_usd
+        input_amount = payload.amount
+        input_currency = payload.input_currency.upper().strip()
+        amount, fx_rate = to_usd(db, input_amount, input_currency)
+    else:
+        amount = money(payload.amount)
+
     fee = money(method.withdrawal_fee)
     if amount <= 0:
         raise HTTPException(status_code=422, detail="Amount must be positive.")
@@ -268,6 +296,7 @@ def create_withdrawal(payload: WithdrawalCreateRequest,
         asset=method.asset, network=method.network, payment_method_id=method.id,
         withdrawal_address=payload.withdrawal_address,
         withdrawal_details=(payload.withdrawal_details or "").strip()[:500] or None,
+        input_amount=input_amount, input_currency=input_currency, fx_rate=fx_rate,
     )
     db.add(tx)
     notify_admins(db, "Withdrawal awaiting payout",

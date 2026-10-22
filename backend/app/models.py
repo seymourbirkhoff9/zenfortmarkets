@@ -65,6 +65,7 @@ class User(Base):
     referred_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     referral_count = Column(Integer, default=0, nullable=False)
     total_referral_earned = Column(Numeric(18, 8), default=Decimal("0.00"), nullable=False)
+    display_currency = Column(String(10), nullable=True)  # User's preferred display currency (e.g., "EUR", "NGN")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -125,6 +126,10 @@ class Transaction(Base):
     withdrawal_address = Column(String(255), nullable=True)  # User's withdrawal address
     payout_tx_hash = Column(String(255), nullable=True)  # Admin's payout transaction reference
     rejection_reason = Column(Text, nullable=True)
+    # Multi-currency input tracking
+    input_amount = Column(Numeric(precision=20, scale=8), nullable=True)  # Original amount in input_currency
+    input_currency = Column(String(10), nullable=True)  # Currency user specified (e.g., "EUR")
+    fx_rate = Column(Numeric(precision=20, scale=10), nullable=True)  # Rate used for conversion
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     sender_wallet = relationship("Wallet", foreign_keys=[sender_wallet_id], back_populates="debit_transactions")
@@ -247,4 +252,18 @@ class PaymentMethod(Base):
     withdrawal_fee = Column(Numeric(precision=20, scale=8), nullable=False, default=Decimal("0"))  # flat, in USD
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# ──────────────────────────────────────────────
+# FX Rates (currency conversion rates)
+# ──────────────────────────────────────────────
+class FxRate(Base):
+    __tablename__ = "fx_rates"
+
+    currency = Column(String(10), primary_key=True, nullable=False)  # ISO code, e.g., "EUR", "NGN"
+    rate_per_usd = Column(Numeric(precision=20, scale=10), nullable=True)  # Units of this currency per 1 USD
+    override_rate = Column(Numeric(precision=20, scale=10), nullable=True)  # Admin override, wins when set
+    is_enabled = Column(Boolean, nullable=False, default=True)
+    source = Column(String(50), nullable=True)  # e.g., "open.er-api.com"
+    updated_at = Column(DateTime(timezone=True), nullable=True)
 

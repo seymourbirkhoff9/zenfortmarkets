@@ -68,10 +68,20 @@ def signup(payload: SignUpRequest, db: Session = Depends(get_db)):
         if not referrer:
             raise HTTPException(status_code=400, detail="That referral code doesn't exist.")
 
+    # Derive display_currency from country if not provided
+    display_currency = None
+    if payload.display_currency:
+        display_currency = payload.display_currency.upper().strip()[:10]
+    else:
+        from app.utils.country_currency import get_currency_for_country
+        country_str = payload.country.value if hasattr(payload.country, "value") else payload.country
+        display_currency = get_currency_for_country(country_str)
+
     user = User(
         email=email, full_name=payload.full_name.strip(), hashed_password=hash_password(payload.password),
         country=payload.country.value if hasattr(payload.country, "value") else payload.country,
-        phone=payload.phone, is_active=True, is_admin=False, is_verified=False, email_verified=False,
+        phone=payload.phone, display_currency=display_currency,
+        is_active=True, is_admin=False, is_verified=False, email_verified=False,
         referral_code=_generate_unique_referral_code(db),
         referred_by_id=referrer.id if referrer else None,
         terms_version=settings.TERMS_VERSION, terms_accepted_at=datetime.now(timezone.utc),
@@ -222,6 +232,7 @@ def resend_verification(current_user: User = Depends(get_current_user)):
 class ProfileUpdate(BaseModel):
     full_name: str | None = None
     phone: str | None = None
+    display_currency: str | None = None  # User's preferred display currency (3-10 uppercase letters)
 
     @field_validator("full_name")
     @classmethod
@@ -229,6 +240,15 @@ class ProfileUpdate(BaseModel):
         if v is not None and not v.strip():
             raise ValueError("Name can't be empty.")
         return v.strip() if v else v
+
+    @field_validator("display_currency")
+    @classmethod
+    def currency_format(cls, v):
+        if v is not None:
+            v = v.upper().strip()
+            if not (3 <= len(v) <= 10) or not v.isalpha():
+                raise ValueError("Currency must be 3-10 uppercase letters.")
+        return v
 
 
 class PasswordChange(BaseModel):
@@ -250,6 +270,8 @@ def update_profile(payload: ProfileUpdate, current_user: User = Depends(get_curr
         current_user.full_name = payload.full_name
     if payload.phone is not None:
         current_user.phone = payload.phone.strip() or None
+    if payload.display_currency is not None:
+        current_user.display_currency = payload.display_currency.upper().strip()[:10]
     db.commit()
     db.refresh(current_user)
     return current_user

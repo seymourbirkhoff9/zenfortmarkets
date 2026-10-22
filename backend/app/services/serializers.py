@@ -39,6 +39,9 @@ def tx_view(tx: Transaction, own_wallet_ids: Optional[Iterable] = None) -> dict:
         "payout_tx_hash": tx.payout_tx_hash,
         "rejection_reason": tx.rejection_reason,
         "reviewed_at": tx.reviewed_at,
+        "input_amount": tx.input_amount,
+        "input_currency": tx.input_currency,
+        "fx_rate": tx.fx_rate,
         "created_at": tx.created_at,
     }
 
