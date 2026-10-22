@@ -572,7 +572,8 @@ def review_kyc(user_id: str, payload: AdminKYCReviewRequest,
 
 
 # ── Investment plans ──────────────────────────
-@router.post("/plans/", response_model=InvestmentPlanResponse, status_code=201)
+@router.post("/plans", response_model=InvestmentPlanResponse, status_code=201)
+@router.post("/plans/", response_model=InvestmentPlanResponse, status_code=201, include_in_schema=False)
 def create_investment_plan(payload: InvestmentPlanCreate, admin=Depends(get_current_admin),
                            db: Session = Depends(get_db)):
     if db.query(InvestmentPlan.id).filter(func.lower(InvestmentPlan.name) == payload.name.lower()).first():
@@ -586,7 +587,8 @@ def create_investment_plan(payload: InvestmentPlanCreate, admin=Depends(get_curr
     return plan
 
 
-@router.get("/plans/", response_model=List[InvestmentPlanResponse])
+@router.get("/plans", response_model=List[InvestmentPlanResponse])
+@router.get("/plans/", response_model=List[InvestmentPlanResponse], include_in_schema=False)
 def list_all_plans(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     return db.query(InvestmentPlan).order_by(InvestmentPlan.created_at.asc()).all()
 
