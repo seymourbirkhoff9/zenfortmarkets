@@ -595,16 +595,8 @@ class WithdrawalCreateRequest(BaseModel):
     payment_method_id: uuid.UUID
     amount: Decimal                          # USD amount debited from the Main wallet (if input_currency is null/USD). If input_currency is set, amount is in that currency and will be converted to USD.
     input_currency: Optional[str] = None  # If set, amount is in this currency (e.g., "EUR")
-    withdrawal_address: str
+    withdrawal_address: Optional[str] = None  # Required for crypto, not for bank transfers
     withdrawal_details: Optional[str] = None  # memo/tag or notes for the admin
-
-    @field_validator("withdrawal_address")
-    @classmethod
-    def address_shape(cls, v: str) -> str:
-        v = v.strip()
-        if not (10 <= len(v) <= 128) or any(c.isspace() for c in v):
-            raise ValueError("Enter a valid wallet address.")
-        return v
 
     @field_validator("amount")
     @classmethod

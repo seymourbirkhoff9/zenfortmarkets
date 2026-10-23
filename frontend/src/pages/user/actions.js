@@ -301,7 +301,7 @@ export function withdrawDialog() {
             }
 
             $('#wd-summary', dlg).textContent = `Network fee ${feeText}.${minText ? ` Minimum ${minText}.` : ''}` +
-              (amt > fee ? ` You receive about ${money(amt - fee)} worth of ${m.asset}.` : '');
+              (amt > fee ? ` You receive about ${money(amt - fee)} worth of USD.` : '');
 
             // Show payment method details for bank transfers
             const detailsBox = $('#wd-details-box', dlg);

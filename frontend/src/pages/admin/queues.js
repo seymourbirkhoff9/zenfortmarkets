@@ -16,6 +16,26 @@ const customerCell = (t) => (t.user_id
 const copyable = (value, label) => value ? html`<button class="inline-flex items-center gap-1 font-mono text-xs hover:underline" data-copy="${value}" title="Copy ${label}">
   ${shorten(value, 10, 8)}${icon('copy', 'h-3.5 w-3.5 text-muted')}</button>` : html`<span class="text-muted">—</span>`;
 
+const renderWithdrawalDetails = (detailsStr) => {
+  try {
+    const details = JSON.parse(detailsStr);
+    const fields = [
+      details.bank_name && ['Bank', details.bank_name],
+      details.account_holder && ['Account holder', details.account_holder],
+      details.account_number && ['Account number', details.account_number],
+      details.sort_code && ['Sort code', details.sort_code],
+      details.iban && ['IBAN', details.iban],
+      details.swift && ['SWIFT/BIC', details.swift],
+    ].filter(Boolean);
+    if (fields.length === 0) return html`<span class="mt-1 block max-w-[16rem] text-xs">Note: ${detailsStr}</span>`;
+    return html`<div class="mt-1 text-xs text-muted">
+      ${fields.map(([label, value]) => html`<div><span class="font-medium">${label}:</span> ${value}</div>`)}
+    </div>`;
+  } catch {
+    return html`<span class="mt-1 block max-w-[16rem] text-xs">Note: ${detailsStr}</span>`;
+  }
+};
+
 /* ── Deposits ──────────────────────────────────────────────────────── */
 export async function depositsQueue(outlet) {
   const head = pageHeader('Deposits', 'Check each payment on-chain against the hash or screenshot, then confirm or reject it. Confirming credits the customer’s Main wallet immediately.');
@@ -99,7 +119,7 @@ export async function withdrawalsQueue(outlet) {
             <td>${customerCell(t)}</td>
             <td>${t.asset}<span class="block text-xs text-muted">${t.network}</span></td>
             <td>${copyable(t.withdrawal_address, 'address')}
-              ${t.withdrawal_details ? html`<span class="mt-1 block max-w-[16rem] text-xs">Note: ${t.withdrawal_details}</span>` : ''}</td>
+              ${t.withdrawal_details ? html`${renderWithdrawalDetails(t.withdrawal_details)}` : ''}</td>
             <td class="text-right">
               ${t.input_currency && t.input_amount ? html`
                 <span class="figure text-lg">${money(t.input_amount, t.input_currency)}</span>
@@ -131,7 +151,7 @@ export async function withdrawalsQueue(outlet) {
           <dt class="text-muted">Send</dt><dd class="figure">${sendAmt} worth of ${t.asset}</dd>
           <dt class="text-muted">Network</dt><dd>${t.network}</dd>
           <dt class="text-muted">Address</dt><dd class="break-all font-mono text-xs">${t.withdrawal_address}</dd>
-          ${t.withdrawal_details ? html`<dt class="text-muted">Note</dt><dd>${t.withdrawal_details}</dd>` : ''}
+          ${t.withdrawal_details ? html`<dt class="text-muted">Bank details</dt><dd class="text-xs">${renderWithdrawalDetails(t.withdrawal_details)}</dd>` : ''}
         </dl>
         <div class="field"><label class="label" for="ph">Payout transaction hash</label>
           <input class="input font-mono text-sm" id="ph" name="payout_tx_hash" required autocomplete="off" spellcheck="false" />
