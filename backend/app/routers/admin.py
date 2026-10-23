@@ -359,19 +359,37 @@ def deactivate_user(user_id: str, admin=Depends(get_current_admin), db: Session 
 def credit_user_wallet(payload: AdminCreditRequest, admin=Depends(get_current_admin),
                        db: Session = Depends(get_db)):
     user = _get_user(db, user_id=payload.user_id, email=payload.user_email)
-    amount = money(payload.amount)
+
+    # Handle currency conversion if input_currency is provided
+    input_amount = None
+    input_currency = None
+    fx_rate = None
+
+    if payload.input_currency and payload.input_currency.upper() != "USD":
+        from app.services.fx_service import to_usd
+        input_amount = payload.amount
+        input_currency = payload.input_currency.upper().strip()
+        amount, fx_rate = to_usd(db, input_amount, input_currency)
+    else:
+        amount = money(payload.amount)
+
     wallet = lock_wallet(db, user.id, payload.wallet_type)
     credit(wallet, amount)
     note = (payload.description or "").strip()[:200] or f"Credit to {payload.wallet_type} wallet"
     tx = Transaction(receiver_wallet_id=wallet.id, amount=amount, currency=CUR, tx_type="admin_credit",
                      status="completed", description=note, reviewed_by_id=admin.id,
-                     reviewed_at=datetime.now(timezone.utc))
+                     reviewed_at=datetime.now(timezone.utc),
+                     input_amount=input_amount, input_currency=input_currency, fx_rate=fx_rate)
     db.add(tx)
     _audit(db, admin, "CREDIT_WALLET", user.id, f"+{usd(amount)} to {payload.wallet_type}: {note}")
     db.commit()
     db.refresh(tx)
-    _notify(db, user, "Wallet credited", f"{usd(amount)} was added to your {payload.wallet_type.title()} wallet.",
-            "deposit", rows=[("Amount", usd(amount)), ("Wallet", payload.wallet_type.title()), ("Note", note)])
+    # Format amount with currency if input_currency is set
+    amount_text = usd(amount)
+    if input_amount and input_currency:
+        amount_text = f"{input_amount:,.2f} {input_currency} (~{usd(amount)})"
+    _notify(db, user, "Wallet credited", f"{amount_text} was added to your {payload.wallet_type.title()} wallet.",
+            "deposit", rows=[("Amount", amount_text), ("Wallet", payload.wallet_type.title()), ("Note", note)])
     return admin_tx_view(tx, user)
 
 
@@ -381,19 +399,37 @@ def debit_user_wallet(payload: AdminDebitRequest, admin=Depends(get_current_admi
     if not payload.user_id and not payload.user_email:
         raise HTTPException(status_code=422, detail="Provide user_id or user_email.")
     user = _get_user(db, user_id=payload.user_id, email=payload.user_email)
-    amount = money(payload.amount)
+
+    # Handle currency conversion if input_currency is provided
+    input_amount = None
+    input_currency = None
+    fx_rate = None
+
+    if payload.input_currency and payload.input_currency.upper() != "USD":
+        from app.services.fx_service import to_usd
+        input_amount = payload.amount
+        input_currency = payload.input_currency.upper().strip()
+        amount, fx_rate = to_usd(db, input_amount, input_currency)
+    else:
+        amount = money(payload.amount)
+
     wallet = lock_wallet(db, user.id, payload.wallet_type)
     debit(wallet, amount, "The wallet balance is lower than that amount.")
     note = (payload.description or "").strip()[:200] or f"Debit from {payload.wallet_type} wallet"
     tx = Transaction(sender_wallet_id=wallet.id, amount=amount, currency=CUR, tx_type="admin_debit",
                      status="completed", description=note, reviewed_by_id=admin.id,
-                     reviewed_at=datetime.now(timezone.utc))
+                     reviewed_at=datetime.now(timezone.utc),
+                     input_amount=input_amount, input_currency=input_currency, fx_rate=fx_rate)
     db.add(tx)
     _audit(db, admin, "DEBIT_WALLET", user.id, f"-{usd(amount)} from {payload.wallet_type}: {note}")
     db.commit()
     db.refresh(tx)
-    _notify(db, user, "Wallet debited", f"{usd(amount)} was deducted from your {payload.wallet_type.title()} wallet.",
-            "account", rows=[("Amount", usd(amount)), ("Wallet", payload.wallet_type.title()), ("Note", note)])
+    # Format amount with currency if input_currency is set
+    amount_text = usd(amount)
+    if input_amount and input_currency:
+        amount_text = f"{input_amount:,.2f} {input_currency} (~{usd(amount)})"
+    _notify(db, user, "Wallet debited", f"{amount_text} was deducted from your {payload.wallet_type.title()} wallet.",
+            "account", rows=[("Amount", amount_text), ("Wallet", payload.wallet_type.title()), ("Note", note)])
     return admin_tx_view(tx, user)
 
 
@@ -478,14 +514,22 @@ def review_deposit(transaction_id: str, payload: AdminDepositReviewRequest,
 
     if tx.status == "completed":
         process_referral_milestone(db, user, "first_deposit", tx.amount)
+        # Format amount with currency if input_currency is set
+        amount_text = usd(tx.amount)
+        if tx.input_currency and tx.input_amount:
+            amount_text = f"{tx.input_amount:,.2f} {tx.input_currency} (~{usd(tx.amount)})"
         _notify(db, user, "Deposit approved",
-                f"Your {usd(tx.amount)} deposit via {tx.gateway_name} is now in your Main wallet.", "deposit",
-                rows=[("Amount", usd(tx.amount)), ("Method", tx.gateway_name or "—"),
+                f"Your {amount_text} deposit via {tx.gateway_name} is now in your Main wallet.", "deposit",
+                rows=[("Amount", amount_text), ("Method", tx.gateway_name or "—"),
                       *([("Transaction hash", tx.tx_hash)] if tx.tx_hash else [])])
     else:
+        # Format amount with currency if input_currency is set
+        amount_text = usd(tx.amount)
+        if tx.input_currency and tx.input_amount:
+            amount_text = f"{tx.input_amount:,.2f} {tx.input_currency} (~{usd(tx.amount)})"
         _notify(db, user, "Deposit rejected",
-                f"Your {usd(tx.amount)} deposit via {tx.gateway_name} was not approved.", "deposit",
-                rows=[("Amount", usd(tx.amount)), ("Method", tx.gateway_name or "—"), ("Reason", tx.rejection_reason)])
+                f"Your {amount_text} deposit via {tx.gateway_name} was not approved.", "deposit",
+                rows=[("Amount", amount_text), ("Method", tx.gateway_name or "—"), ("Reason", tx.rejection_reason)])
     return admin_tx_view(tx, user)
 
 
@@ -518,15 +562,23 @@ def review_withdrawal(transaction_id: str, payload: AdminWithdrawalReviewRequest
     db.refresh(tx)
 
     if tx.status == "completed":
+        # Format amount with currency if input_currency is set
+        amount_text = usd(payout)
+        if tx.input_currency and tx.input_amount:
+            amount_text = f"{tx.input_amount:,.2f} {tx.input_currency} (~{usd(payout)})"
         _notify(db, user, "Withdrawal sent",
-                f"We sent {usd(payout)} worth of {tx.asset} on {tx.network} to your address.", "withdrawal",
-                rows=[("Amount sent", usd(payout)), ("Network fee", usd(tx.fee or 0)),
+                f"We sent {amount_text} worth of {tx.asset} on {tx.network} to your address.", "withdrawal",
+                rows=[("Amount sent", amount_text), ("Network fee", usd(tx.fee or 0)),
                       ("Asset", f"{tx.asset} on {tx.network}"), ("To address", tx.withdrawal_address or "—"),
                       ("Payout reference", tx.payout_tx_hash)])
     else:
+        # Format amount with currency if input_currency is set
+        amount_text = usd(tx.amount)
+        if tx.input_currency and tx.input_amount:
+            amount_text = f"{tx.input_amount:,.2f} {tx.input_currency} (~{usd(tx.amount)})"
         _notify(db, user, "Withdrawal rejected",
-                f"Your {usd(tx.amount)} withdrawal was not processed and the funds are back in your Main wallet.",
-                "withdrawal", rows=[("Amount returned", usd(tx.amount)), ("Reason", tx.rejection_reason)])
+                f"Your {amount_text} withdrawal was not processed and the funds are back in your Main wallet.",
+                "withdrawal", rows=[("Amount returned", amount_text), ("Reason", tx.rejection_reason)])
     return admin_tx_view(tx, user)
 
 
@@ -764,6 +816,22 @@ def get_admin_fx_rates(admin=Depends(get_current_admin), db: Session = Depends(g
         )
         for row in rows
     ]
+
+
+@router.get("/fx/rates/{currency}", response_model=AdminFxRateOut)
+def get_admin_fx_rate(currency: str, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Get a single FX rate by currency code."""
+    row = db.query(FxRate).filter(FxRate.currency == currency).first()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Currency {currency} not found.")
+    return AdminFxRateOut(
+        currency=row.currency,
+        rate_per_usd=row.rate_per_usd,
+        override_rate=row.override_rate,
+        is_enabled=row.is_enabled,
+        source=row.source,
+        updated_at=row.updated_at.isoformat() if row.updated_at else None
+    )
 
 
 @router.patch("/fx/rates/{currency}", response_model=AdminFxRateOut)

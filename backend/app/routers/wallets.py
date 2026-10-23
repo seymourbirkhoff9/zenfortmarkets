@@ -108,7 +108,19 @@ def p2p_transfer(payload: P2PTransferRequest,
     if not recipient or not recipient.is_active:
         raise HTTPException(status_code=404, detail="No active account uses that email.")
 
-    amount = money(payload.amount)
+    # Handle currency conversion if input_currency is provided
+    input_amount = None
+    input_currency = None
+    fx_rate = None
+
+    if payload.input_currency and payload.input_currency.upper() != "USD":
+        from app.services.fx_service import to_usd
+        input_amount = payload.amount
+        input_currency = payload.input_currency.upper().strip()
+        amount, fx_rate = to_usd(db, input_amount, input_currency)
+    else:
+        amount = money(payload.amount)
+
     sender_w = db.query(Wallet).filter(Wallet.user_id == current_user.id, Wallet.wallet_type == "main").first()
     recip_w = db.query(Wallet).filter(Wallet.user_id == recipient.id, Wallet.wallet_type == "main").first()
     if not sender_w or not recip_w:
@@ -123,13 +135,18 @@ def p2p_transfer(payload: P2PTransferRequest,
         sender_wallet_id=sender_w.id, receiver_wallet_id=recip_w.id, amount=amount,
         currency=CUR, tx_type="p2p", status="completed",
         description=(payload.description or "").strip()[:200] or f"Transfer to {recipient.email}",
+        input_amount=input_amount, input_currency=input_currency, fx_rate=fx_rate,
     )
     db.add(tx)
     db.commit()
     db.refresh(tx)
+    # Format amount with currency if input_currency is set
+    amount_text = usd(amount)
+    if tx.input_currency and tx.input_amount:
+        amount_text = f"{tx.input_amount:,.2f} {tx.input_currency} (~{usd(amount)})"
     queue_email(recipient.email, f"You received {usd(amount)}",
                 render_email("Funds received", recipient.full_name,
-                             [f"{current_user.full_name} sent you {usd(amount)}.",
+                             [f"{current_user.full_name} sent you {amount_text}.",
                               "It is already in your Main wallet."]))
     return tx_view(tx, [sender_w.id])
 

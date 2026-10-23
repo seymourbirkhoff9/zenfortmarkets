@@ -250,6 +250,7 @@ class P2PTransferRequest(BaseModel):
     recipient_email: EmailStr
     amount: Decimal
     description: Optional[str] = None
+    input_currency: Optional[str] = None  # If set, amount is in this currency and will be converted to USD
 
     @field_validator("amount")
     @classmethod
@@ -509,6 +510,7 @@ class AdminCreditRequest(BaseModel):
     wallet_type: Literal["main", "profit"]
     amount: Decimal
     description: Optional[str] = None
+    input_currency: Optional[str] = None  # If set, amount is in this currency and will be converted to USD
 
     @field_validator("amount")
     @classmethod
@@ -530,6 +532,7 @@ class AdminDebitRequest(BaseModel):
     wallet_type: Literal["main", "profit"]
     amount: Decimal
     description: Optional[str] = None
+    input_currency: Optional[str] = None  # If set, amount is in this currency and will be converted to USD
 
     @field_validator("amount")
     @classmethod
