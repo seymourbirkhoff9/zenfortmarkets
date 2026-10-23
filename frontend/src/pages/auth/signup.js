@@ -2,6 +2,7 @@ import { api, ApiError } from '../../lib/api.js';
 import { $, html, render } from '../../lib/dom.js';
 import { authLayout, processAside } from './layout.js';
 import { passwordToggles } from '../../lib/password.js';
+import { CURRENCIES, COUNTRY_CURRENCY } from '../../lib/currencies.js';
 
 // Must match backend CountryEnum values.
 const COUNTRIES = ['Argentina','Australia','Austria','Bangladesh','Belgium','Brazil','Cameroon','Canada','China','Denmark','Egypt','Ethiopia','Finland','France','Germany','Ghana','Greece','India','Indonesia','Ireland','Italy','Ivory Coast','Japan','Kenya','Malaysia','Mexico','Netherlands','New Zealand','Nigeria','Norway','Pakistan','Philippines','Poland','Portugal','Russia','Saudi Arabia','Senegal','Singapore','South Africa','Spain','Sweden','Switzerland','Tanzania','Thailand','Turkey','Ukraine','United Arab Emirates','United Kingdom','United States','Vietnam','Zambia','Zimbabwe'];
@@ -27,6 +28,12 @@ authLayout({
         <div class="field"><label class="label" for="phone">Phone <span class="font-normal text-muted">(optional)</span></label>
           <input class="input" id="phone" name="phone" type="tel" autocomplete="tel" /></div>
       </div>
+      <div class="field"><label class="label" for="display_currency">Display currency <span class="font-normal text-muted">(optional)</span></label>
+        <select class="input" id="display_currency" name="display_currency">
+          <option value="">USD (default)</option>
+          ${CURRENCIES.map((c) => html`<option value="${c.code}">${c.code} - ${c.name}</option>`)}
+        </select>
+        <p class="hint">Choose your preferred currency for displaying balances. Auto-selected based on country.</p></div>
       <div class="field"><label class="label" for="password">Password</label>
         <input class="input" id="password" name="password" type="password" autocomplete="new-password" minlength="8" required />
         <p class="hint">At least 8 characters.</p></div>
@@ -46,6 +53,17 @@ authLayout({
 });
 
 passwordToggles();
+
+// Auto-select display currency based on country
+$('#country').addEventListener('change', (e) => {
+  const currencySelect = $('#display_currency');
+  const defaultCurrency = COUNTRY_CURRENCY[e.target.value];
+  if (defaultCurrency) {
+    currencySelect.value = defaultCurrency;
+  } else {
+    currencySelect.value = '';
+  }
+});
 
 $('#signup').addEventListener('submit', async (e) => {
   e.preventDefault();

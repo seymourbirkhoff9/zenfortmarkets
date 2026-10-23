@@ -15,6 +15,7 @@ import methods from './pages/admin/methods.js';
 import broadcast from './pages/admin/broadcast.js';
 import audit from './pages/admin/audit.js';
 import investments from './pages/admin/investments.js';
+import fx from './pages/admin/fx.js';
 
 const NAV = [
   { href: '#/', label: 'Overview', icon: 'home', match: '/' },
@@ -30,12 +31,13 @@ const NAV = [
   { section: 'Configuration' },
   { href: '#/plans', label: 'Investment plans', icon: 'layers', match: '/plans' },
   { href: '#/methods', label: 'Payment methods', icon: 'coin', match: '/methods' },
+  { href: '#/fx', label: 'FX Rates', icon: 'exchange', match: '/fx' },
   { href: '#/broadcast', label: 'Email customers', icon: 'mail', match: '/broadcast' },
 ];
 
 const TITLES = { '/': 'Overview', '/deposits': 'Deposits', '/withdrawals': 'Withdrawals', '/kyc': 'Identity checks',
   '/customers': 'Customers', '/customers/:id': 'Customer', '/ledger': 'Ledger', '/audit': 'Audit log',
-  '/plans': 'Investment plans', '/investments': 'Investments', '/methods': 'Payment methods', '/broadcast': 'Email customers' };
+  '/plans': 'Investment plans', '/investments': 'Investments', '/methods': 'Payment methods', '/fx': 'FX Rates', '/broadcast': 'Email customers' };
 
 (async () => {
   // Preload only if this browser was an admin last time; avoids a pointless 403 for customers.
@@ -62,6 +64,6 @@ const TITLES = { '/': 'Overview', '/deposits': 'Deposits', '/withdrawals': 'With
   createRouter({
     '/': overview, '/deposits': depositsQueue, '/withdrawals': withdrawalsQueue, '/kyc': kyc,
     '/customers': customers, '/customers/:id': customer, '/ledger': ledger, '/audit': audit,
-    '/plans': plans, '/investments': investments, '/methods': methods, '/broadcast': broadcast, '*': overview,
+    '/plans': plans, '/investments': investments, '/methods': methods, '/fx': fx, '/broadcast': broadcast, '*': overview,
   }, { onRoute: (pattern, path) => { shell.setActive(path); document.title = `${TITLES[pattern] || 'Overview'} — Zenfort operations`; } }).start();
 })();

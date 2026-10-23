@@ -176,6 +176,9 @@ export const api = {
     dashboard: () => get('/users/me/dashboard'),
     context: () => get('/users/me/context'),   // standing + balances + payment methods, for money dialogs
   },
+  fx: {
+    rates: () => get('/fx/rates'),
+  },
   admin: {
     stats: () => get('/admin/stats'),
     overview: () => get('/admin/overview'),
@@ -211,5 +214,11 @@ export const api = {
     broadcast: (payload) => post('/admin/emails/broadcast', payload),
     broadcastHistory: () => get('/admin/emails/history'),
     emailUser: (payload) => post('/admin/emails/send-user', payload),
+    fxRates: () => get('/admin/fx/rates'),
+    fxRate: (currency) => get(`/admin/fx/rates/${currency}`),
+    createFxRate: (payload) => post('/admin/fx/rates', payload),
+    updateFxRate: (currency, payload) => patch(`/admin/fx/rates/${currency}`, payload),
+    deleteFxRate: (currency) => del(`/admin/fx/rates/${currency}`),
+    refreshFxRates: () => post('/admin/fx/refresh'),
   },
 };

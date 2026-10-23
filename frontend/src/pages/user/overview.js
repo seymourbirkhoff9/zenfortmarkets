@@ -10,15 +10,21 @@ import { depositDialog, moveDialog, sendDialog, withdrawDialog } from './actions
 
 export default async function overview(outlet) {
   let data;
+  let fxRates = [];
   render(outlet, html`${pageHeader('Overview')}<div class="panel">${skeletonRows(6)}</div>`);
 
   // One request for the whole screen; instant from cache when revisiting.
   async function load() {
     try {
-      await swr('dashboard', api.me.dashboard, (d) => {
+      await swr('dashboard', api.me.dashboard, async (d) => {
         session.user = d.user;
         data = { user: d.user, bal: Object.fromEntries(d.wallets.map((w) => [w.wallet_type, Number(w.balance)])),
           txs: d.recent, pending: d.pending, inv: d.active_investments };
+        // Fetch FX rates for balance conversion
+        try {
+          const response = await api.fx.rates();
+          fxRates = response?.rates || [];
+        } catch { fxRates = []; }
         draw();
       });
     } catch (err) {
@@ -26,10 +32,27 @@ export default async function overview(outlet) {
     }
   }
 
+  function convertToDisplayCurrency(usdAmount, displayCurrency) {
+    if (displayCurrency === 'USD' || !displayCurrency) return usdAmount;
+    const rateObj = fxRates.find((r) => r.currency === displayCurrency);
+    const rate = rateObj?.effective_rate;
+    if (rate) {
+      return usdAmount * rate;
+    }
+    return usdAmount; // Fallback to USD if rate not found
+  }
+
   function draw() {
     const { user, bal, txs, pending, inv } = data;
     const invested = Number(inv.capital);
     const first = user.full_name.split(' ')[0];
+    const currency = user.display_currency || 'USD';
+
+    // Convert USD balances to display currency
+    const mainInCurrency = convertToDisplayCurrency(bal.main, currency);
+    const profitInCurrency = convertToDisplayCurrency(bal.profit, currency);
+    const investedInCurrency = convertToDisplayCurrency(invested, currency);
+
     render(outlet, html`
       ${pageHeader(`Hello, ${first}`)}
       ${notices(user)}
@@ -39,18 +62,21 @@ export default async function overview(outlet) {
         <div class="grid gap-px bg-line md:grid-cols-[1.4fr_1fr_1fr]">
           <div class="bg-surface p-6">
             <p class="text-sm text-muted">Main wallet</p>
-            <p class="figure mt-1 text-5xl">${money(bal.main)}</p>
+            <p class="figure mt-1 text-3xl md:text-5xl break-words">${money(mainInCurrency, currency)}</p>
+            ${currency !== 'USD' ? html`<p class="mt-1 text-xs text-muted">≈ ${money(bal.main)} USD</p>` : ''}
             <span class="mt-3 block h-0.5 w-14 bg-brass" aria-hidden="true"></span>
             <p class="mt-3 text-sm text-muted">Spendable. Deposits arrive here; withdrawals and investments come from here.</p>
           </div>
           <div class="bg-surface p-6">
             <p class="text-sm text-muted">Profit wallet</p>
-            <p class="figure mt-1 text-3xl">${money(bal.profit)}</p>
+            <p class="figure mt-1 text-2xl md:text-3xl break-words">${money(profitInCurrency, currency)}</p>
+            ${currency !== 'USD' ? html`<p class="mt-1 text-xs text-muted">≈ ${money(bal.profit)} USD</p>` : ''}
             <p class="mt-2 text-sm text-muted">Investment returns and credits.</p>
           </div>
           <div class="bg-surface p-6">
             <p class="text-sm text-muted">Invested</p>
-            <p class="figure mt-1 text-3xl">${money(invested)}</p>
+            <p class="figure mt-1 text-2xl md:text-3xl break-words">${money(investedInCurrency, currency)}</p>
+            ${currency !== 'USD' && invested > 0 ? html`<p class="mt-1 text-xs text-muted">≈ ${money(invested)} USD</p>` : ''}
             <p class="mt-2 text-sm text-muted">${inv.count ? `${inv.count} active plan${inv.count > 1 ? 's' : ''}` : 'No active plans'}</p>
           </div>
         </div>
@@ -69,14 +95,20 @@ export default async function overview(outlet) {
             <li class="flex items-start justify-between gap-4 px-5 py-3.5">
               <div><p class="font-medium">${t.tx_type === 'deposit' ? 'Deposit' : 'Withdrawal'} via ${t.gateway_name}</p>
                 <p class="text-xs text-muted">Submitted ${ago(t.created_at)}${t.tx_type === 'withdrawal' ? '. Funds are on hold.' : ''}</p></div>
-              <div class="text-right"><p class="figure">${money(t.amount)}</p>${pill('pending')}</div>
+              <div class="text-right">
+                ${t.input_currency && t.input_amount ? html`
+                  <p class="figure">${money(t.input_amount, t.input_currency)}</p>
+                  <p class="text-xs text-muted">≈ ${money(t.amount)} USD</p>
+                ` : html`<p class="figure">${money(t.amount, currency)}</p>`}
+                ${pill('pending')}
+              </div>
             </li>`)}</ul>`
             : emptyState('Nothing pending', 'Deposits and withdrawals you submit appear here until an operator reviews them.')}
         </section>
         <section class="panel" aria-labelledby="recent-h">
-          <div class="panel-head"><h2 id="recent-h" class="panel-title">Recent activity</h2>
+          <div class="panel-head"><h2 id="recent-h" class="panel-title">Recent activity</h2></div>
             <a class="btn-link" href="#/activity">All activity</a></div>
-          ${txs.length ? txTable(txs) : emptyState('No activity yet', 'Make your first deposit to get started.',
+          ${txs.length ? txTable(txs, currency, fxRates) : emptyState('No activity yet', 'Make your first deposit to get started.',
             html`<button class="btn-primary" data-action="deposit">Deposit</button>`)}
         </section>
       </div>`);

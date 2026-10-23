@@ -1,8 +1,31 @@
-const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const plain = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// Dynamic formatter cache - creates formatters on-demand for any currency
+const formatterCache = new Map();
+
+function getFormatter(currency) {
+  if (formatterCache.has(currency)) {
+    return formatterCache.get(currency);
+  }
+  
+  // Create formatter on-demand for any currency
+  // Use en-US locale as default, but format with the target currency
+  const formatter = new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  
+  formatterCache.set(currency, formatter);
+  return formatter;
+}
+
 /** Amounts arrive as decimal strings; Number is fine for display at 2dp, never for maths we send back. */
-export const money = (v) => usd.format(Number(v || 0));
+export const money = (v, currency = 'USD') => {
+  const fmt = getFormatter(currency);
+  return fmt.format(Number(v || 0));
+};
 export const amount = (v) => plain.format(Number(v || 0));
 export const pct = (v) => `${Number(v).toLocaleString('en-US', { maximumFractionDigits: 4 })}%`;
 

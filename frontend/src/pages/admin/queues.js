@@ -32,7 +32,12 @@ export async function depositsQueue(outlet) {
             <td>${t.asset}<span class="block text-xs text-muted">${t.network}</span></td>
             <td class="grid gap-1">${t.tx_hash ? copyable(t.tx_hash, 'hash') : ''}
               ${t.has_proof ? html`<button class="btn-link text-xs justify-self-start" data-proof="${t.id}">View screenshot</button>` : ''}</td>
-            <td class="text-right figure text-lg">${money(t.amount)}</td>
+            <td class="text-right">
+              ${t.input_currency && t.input_amount ? html`
+                <span class="figure text-lg">${money(t.input_amount, t.input_currency)}</span>
+                <span class="block text-xs text-muted">≈ ${money(t.amount)} USD ${t.fx_rate ? `(rate: ${t.fx_rate})` : ''}</span>
+              ` : html`<span class="figure text-lg">${money(t.amount)}</span>`}
+            </td>
             <td>${t.user_id ? html`<div class="flex justify-end gap-2">
               <button class="btn-quiet btn-sm" data-reject="${t.id}">Reject</button>
               <button class="btn-primary btn-sm" data-approve="${t.id}">Confirm</button></div>` : ''}</td>
@@ -95,8 +100,15 @@ export async function withdrawalsQueue(outlet) {
             <td>${t.asset}<span class="block text-xs text-muted">${t.network}</span></td>
             <td>${copyable(t.withdrawal_address, 'address')}
               ${t.withdrawal_details ? html`<span class="mt-1 block max-w-[16rem] text-xs">Note: ${t.withdrawal_details}</span>` : ''}</td>
-            <td class="text-right"><span class="figure text-lg">${money(Number(t.amount) - Number(t.fee || 0))}</span>
-              <span class="block text-xs text-muted">${money(t.amount)} held, ${money(t.fee || 0)} fee</span></td>
+            <td class="text-right">
+              ${t.input_currency && t.input_amount ? html`
+                <span class="figure text-lg">${money(t.input_amount, t.input_currency)}</span>
+                <span class="block text-xs text-muted">≈ ${money(t.amount)} USD ${t.fx_rate ? `(rate: ${t.fx_rate})` : ''}</span>
+              ` : html`
+                <span class="figure text-lg">${money(Number(t.amount) - Number(t.fee || 0))}</span>
+                <span class="block text-xs text-muted">${money(t.amount)} held, ${money(t.fee || 0)} fee</span>
+              `}
+            </td>
             <td>${t.user_id ? html`<div class="flex justify-end gap-2">
               <button class="btn-quiet btn-sm" data-reject="${t.id}">Reject</button>
               <button class="btn-primary btn-sm" data-pay="${t.id}">Mark paid</button></div>` : ''}</td>

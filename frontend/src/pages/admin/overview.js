@@ -61,7 +61,7 @@ export default async function overview(outlet) {
             <p class="text-sm text-muted">${label}</p><p class="figure mt-1 text-2xl">${value}</p><p class="mt-1 text-xs text-muted">${note}</p></div>`)}
         </div>
         <p class="mt-3 text-sm text-muted">${s.users_total} customer${s.users_total === 1 ? '' : 's'}. ${s.users_new_7d} joined this week. ${s.users_blocked} restricted.
-          <a class="btn-link ml-1" href="#/customers">Customers</a></p>
+          <a class="btn-link ml-1" href="#/customers">Customers</a> · <a class="btn-link" href="#/fx">FX Rates</a></p>
       </section>
 
       <section class="panel mt-6" aria-labelledby="recent-h">

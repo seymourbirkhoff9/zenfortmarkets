@@ -41,8 +41,13 @@ export default async function wallet(outlet, _params, query) {
                     ${t.payout_tx_hash ? html`<span class="mt-1 block font-sans text-muted">Payout ref <button class="font-mono hover:underline" data-copy="${t.payout_tx_hash}">${shorten(t.payout_tx_hash)}</button></span>` : ''}`}
               </td>
               <td>${pill(t.status)}${t.rejection_reason ? html`<span class="mt-1 block max-w-[16rem] text-xs text-rejected">${t.rejection_reason}</span>` : ''}</td>
-              <td class="text-right"><span class="figure">${money(t.amount)}</span>
-                ${t.fee && Number(t.fee) ? html`<span class="block text-xs text-muted">fee ${money(t.fee)}</span>` : ''}</td>
+              <td class="text-right">
+                ${t.input_currency && t.input_amount ? html`
+                  <span class="figure">${money(t.input_amount, t.input_currency)}</span>
+                  <span class="block text-xs text-muted">≈ ${money(t.amount)} USD ${t.fx_rate ? `(rate: ${t.fx_rate})` : ''}</span>
+                ` : html`<span class="figure">${money(t.amount)}</span>`}
+                ${t.fee && Number(t.fee) ? html`<span class="block text-xs text-muted">fee ${money(t.fee)}</span>` : ''}
+              </td>
             </tr>`)}</tbody></table></div>`
           : emptyState(tab === 'deposit' ? 'No deposits yet' : 'No withdrawals yet',
               tab === 'deposit' ? 'Send crypto to a published address, then report it here.' : 'Withdrawals you request will be listed here with their payout reference.')}

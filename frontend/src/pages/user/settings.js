@@ -7,6 +7,7 @@ import { refreshUser, session } from '../../session.js';
 import { pageHeader } from '../common.js';
 import { passwordToggles } from '../../lib/password.js';
 import { twoFactorSection } from './twofactor.js';
+import { CURRENCIES } from '../../lib/currencies.js';
 
 const KYC = {
   UNVERIFIED: ['pill-neutral', 'Not started'],
@@ -44,6 +45,12 @@ export default async function settings(outlet) {
         <form id="profile" class="grid max-w-md gap-4">
           <div class="field"><label class="label" for="s-name">Full name</label><input class="input" id="s-name" name="full_name" value="${u.full_name}" required /></div>
           <div class="field"><label class="label" for="s-phone">Phone</label><input class="input" id="s-phone" name="phone" type="tel" value="${u.phone || ''}" /></div>
+          <div class="field"><label class="label" for="s-currency">Display currency</label>
+            <select class="input" id="s-currency" name="display_currency">
+              <option value="">USD (default)</option>
+              ${CURRENCIES.map((c) => html`<option value="${c.code}" ${u.display_currency === c.code ? 'selected' : ''}>${c.code} - ${c.name}</option>`)}
+            </select>
+            <p class="hint">Choose your preferred currency for displaying balances and amounts.</p></div>
           <div class="field"><span class="label">Email</span>
             <p class="text-sm">${u.email} ${u.email_verified ? html`<span class="pill-settled ml-1">Confirmed</span>`
               : html`<span class="pill-pending ml-1">Not confirmed</span> <button type="button" class="btn-link ml-2" data-action="resend">Send link</button>`}</p></div>
@@ -88,7 +95,15 @@ export default async function settings(outlet) {
     e.preventDefault();
     const btn = e.target.querySelector('button:not([type=button])');
     setBusy(btn, true);
-    try { await api.auth.updateMe({ full_name: e.target.full_name.value.trim(), phone: e.target.phone.value.trim() }); await refreshUser(); toast('Profile saved.'); }
+    try { 
+      await api.auth.updateMe({ 
+        full_name: e.target.full_name.value.trim(), 
+        phone: e.target.phone.value.trim(),
+        display_currency: e.target.display_currency.value
+      }); 
+      await refreshUser(); 
+      toast('Profile saved.'); 
+    }
     catch (err) { toastError(err); } finally { setBusy(btn, false); }
   });
 
