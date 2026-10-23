@@ -283,7 +283,24 @@ export function withdrawDialog() {
             if (!m) return;
             const fee = Number(m.withdrawal_fee);
             const min = Number(m.min_withdrawal);
-            $('#wd-summary', dlg).textContent = `Network fee ${money(fee)}.${min ? ` Minimum ${money(min)}.` : ''}` +
+
+            // Convert fee and minimum to selected currency
+            let feeText = money(fee);
+            let minText = min ? money(min) : '';
+            if (currency && currency !== 'USD') {
+              const rateObj = fxRates.find((r) => r.currency === currency);
+              const rate = rateObj?.effective_rate;
+              if (rate) {
+                const feeInCurrency = (fee * rate).toFixed(2);
+                feeText = `${feeInCurrency} ${currency} (~${money(fee)})`;
+                if (min) {
+                  const minInCurrency = (min * rate).toFixed(2);
+                  minText = `${minInCurrency} ${currency} (~${money(min)})`;
+                }
+              }
+            }
+
+            $('#wd-summary', dlg).textContent = `Network fee ${feeText}.${minText ? ` Minimum ${minText}.` : ''}` +
               (amt > fee ? ` You receive about ${money(amt - fee)} worth of ${m.asset}.` : '');
 
             // Show payment method details for bank transfers
@@ -350,7 +367,8 @@ export function withdrawDialog() {
             }
           };
           dlg.addEventListener('change', update);
-          dlg.addEventListener('change', updateRecipientFields);
+          // Only update recipient fields when payment method changes
+          $('input[name=payment_method_id]', dlg).addEventListener('change', updateRecipientFields);
           $('#wd-amount', dlg).addEventListener('input', update);
           $('#wd-currency', dlg)?.addEventListener('change', update);
           updateRecipientFields(); // Initial call to show correct fields
