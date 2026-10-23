@@ -245,11 +245,20 @@ export function withdrawDialog() {
       <div id="wd-conversion" class="text-sm text-muted hidden"></div>`,
         onMount: (dlg) => {
           const updateRecipientFields = () => {
-            const m = methods.find((x) => x.id === $('input[name=payment_method_id]:checked', dlg)?.value);
+            const checked = $('input[name=payment_method_id]:checked', dlg);
+            const m = checked ? methods.find((x) => x.id === checked.value) : null;
             const recipientFields = $('#wd-recipient-fields', dlg);
-            if (!m) return;
+            if (!m) {
+              recipientFields.innerHTML = '';
+              return;
+            }
 
-            if (m.method_type === 'bank') {
+            console.log('Selected method:', m.id, m.method_type, m.asset);
+
+            // Default to crypto if method_type is not set
+            const isBank = m.method_type === 'bank';
+
+            if (isBank) {
               // Show bank account input fields
               recipientFields.innerHTML = `
                 <div class="field"><label class="label" for="wd-bank-name">Bank name</label>
@@ -270,7 +279,7 @@ export function withdrawDialog() {
               recipientFields.innerHTML = `
                 <div class="field"><label class="label" for="wd-address">Your wallet address</label>
                   <input class="input font-mono text-sm" id="wd-address" name="withdrawal_address" autocomplete="off" spellcheck="false" required minlength="10" maxlength="128" />
-                  <p class="hint" id="wd-net-hint">Use an address on the ${m.network} network. Payouts sent to a wrong address can't be recovered.</p></div>
+                  <p class="hint" id="wd-net-hint">Use an address on the ${m.network || 'selected'} network. Payouts sent to a wrong address can't be recovered.</p></div>
               `;
             }
           };
@@ -280,6 +289,7 @@ export function withdrawDialog() {
             const amt = Number($('#wd-amount', dlg).value || 0);
             const currency = $('#wd-currency', dlg)?.value;
             const conversion = $('#wd-conversion', dlg);
+            const recipientFields = $('#wd-recipient-fields', dlg);
             if (!m) return;
             const fee = Number(m.withdrawal_fee);
             const min = Number(m.min_withdrawal);
@@ -322,7 +332,12 @@ export function withdrawDialog() {
                 const newBox = document.createElement('div');
                 newBox.id = 'wd-details-box';
                 newBox.className = 'rounded border border-line bg-sunken p-3 text-sm grid gap-1.5 mt-2';
-                $('#wd-address', dlg).parentNode.after(newBox);
+                const addressEl = $('#wd-address', dlg);
+                if (addressEl && addressEl.parentNode) {
+                  addressEl.parentNode.after(newBox);
+                } else if (recipientFields) {
+                  recipientFields.appendChild(newBox);
+                }
               }
               render($('#wd-details-box', dlg), html`
                 ${rows.map(([k, v]) => html`<div class="flex justify-between gap-4">
@@ -368,7 +383,10 @@ export function withdrawDialog() {
           };
           dlg.addEventListener('change', update);
           // Only update recipient fields when payment method changes
-          $('input[name=payment_method_id]', dlg).addEventListener('change', updateRecipientFields);
+          const radioButtons = document.querySelectorAll('input[name=payment_method_id]');
+          radioButtons.forEach(btn => {
+            btn.addEventListener('change', updateRecipientFields);
+          });
           $('#wd-amount', dlg).addEventListener('input', update);
           $('#wd-currency', dlg)?.addEventListener('change', update);
           updateRecipientFields(); // Initial call to show correct fields

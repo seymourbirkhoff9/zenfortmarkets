@@ -283,13 +283,15 @@ def create_withdrawal(payload: WithdrawalCreateRequest,
         raise HTTPException(status_code=400, detail=f"Withdrawals via {method.asset} ({method.network}) are paused.")
 
     # Validate withdrawal_address based on method type
-    if method.method_type == 'crypto':
+    # Default to crypto if method_type is not set
+    method_type = getattr(method, 'method_type', None) or 'crypto'
+    if method_type == 'crypto':
         if not payload.withdrawal_address:
             raise HTTPException(status_code=422, detail="Wallet address is required for crypto withdrawals.")
         addr = payload.withdrawal_address.strip()
         if not (10 <= len(addr) <= 128) or any(c.isspace() for c in addr):
             raise HTTPException(status_code=422, detail="Enter a valid wallet address (10-128 characters, no spaces).")
-    elif method.method_type == 'bank':
+    elif method_type == 'bank':
         # Bank transfers use withdrawal_details for bank account info
         if not payload.withdrawal_details:
             raise HTTPException(status_code=422, detail="Bank account details are required for bank withdrawals.")
