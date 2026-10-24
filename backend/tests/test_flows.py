@@ -609,6 +609,23 @@ def test_admin_email_reports_delivery(client, admin, make_user, monkeypatch):
     assert titles.count("Message from support") == 2                                  # in-app copy always lands
 
 
+def test_admin_broadcast_sends_and_records_delivery(client, admin, make_user, monkeypatch):
+    monkeypatch.setattr(_settings, "DEV_OUTBOX", True)
+    _mailer.OUTBOX.clear()
+    u = make_user()
+    r = client.post("/api/admin/emails/broadcast", headers=admin, json={"subject": "News", "body": "Hello all", "target_filter": "all"})
+    assert r.status_code == 201
+    log = next(l for l in client.get("/api/admin/emails/history", headers=admin).json() if l["id"] == r.json()["id"])
+    assert log["delivered_count"] == log["recipient_count"] > 0 and log["failed_count"] == 0
+    assert any(m["to"] == u["email"] and m["subject"] == "News" for m in _mailer.OUTBOX)
+    assert "New announcement" in [n["title"] for n in client.get("/api/notifications/", headers=u["h"]).json()]
+
+    monkeypatch.setattr(_mailer, "send_batch", lambda msgs: (_ for _ in ()).throw(RuntimeError("boom")))
+    r = client.post("/api/admin/emails/broadcast", headers=admin, json={"subject": "Oops", "body": "x", "target_filter": "all"})
+    log = next(l for l in client.get("/api/admin/emails/history", headers=admin).json() if l["id"] == r.json()["id"])
+    assert log["delivered_count"] == 0 and "boom" in log["last_error"]                # never stuck on "Sending…"
+
+
 def test_mailer_speaks_resend_api(monkeypatch):
     import httpx
     seen = {}

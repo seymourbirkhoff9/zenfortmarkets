@@ -31,8 +31,7 @@ def _in_app(db: Session, user: User, title: str, body: str) -> None:
     db.add(Notification(user_id=user.id, title=title, message=body[:2000], type="general", is_read=False))
 
 
-def _broadcast_emails_task(_request_db: Session, admin_id: str, subject: str, body: str,
-                           target_filter: str, broadcast_log_id: str):
+def _broadcast_emails_task(subject: str, body: str, target_filter: str, broadcast_log_id: str):
     """Background: in-app notice for everyone, then email in batches of 100; records delivered/failed."""
     db = SessionLocal()
     try:
@@ -58,8 +57,16 @@ def _broadcast_emails_task(_request_db: Session, admin_id: str, subject: str, bo
             log.last_error = failed[-1].reason if failed else None
             db.commit()
         logger.info("Broadcast finished: %d recipients, %d failed", len(users), len(failed))
-    except Exception:
+    except Exception as e:
         logger.exception("Broadcast task failed")
+        # Record the failure so the admin's "Sent" list doesn't stay on "Sending…" forever.
+        db.rollback()
+        log = db.query(BroadcastLog).filter(BroadcastLog.id == broadcast_log_id).first()
+        if log:
+            log.delivered_count = 0
+            log.failed_count = max(log.recipient_count, 1)
+            log.last_error = f"Sending stopped: {e}"[:500]
+            db.commit()
     finally:
         db.close()
 
@@ -123,8 +130,6 @@ def broadcast_email(
     # Add background task for async email dispatch
     background_tasks.add_task(
         _broadcast_emails_task,
-        db=db,
-        admin_id=str(admin.id),
         subject=payload.subject,
         body=payload.body,
         target_filter=payload.target_filter,
