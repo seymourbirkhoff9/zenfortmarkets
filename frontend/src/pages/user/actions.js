@@ -289,7 +289,6 @@ export function withdrawDialog() {
             const amt = Number($('#wd-amount', dlg).value || 0);
             const currency = $('#wd-currency', dlg)?.value;
             const conversion = $('#wd-conversion', dlg);
-            const recipientFields = $('#wd-recipient-fields', dlg);
             if (!m) return;
             const fee = Number(m.withdrawal_fee);
             const min = Number(m.min_withdrawal);
@@ -313,42 +312,6 @@ export function withdrawDialog() {
             $('#wd-summary', dlg).textContent = `Network fee ${feeText}.${minText ? ` Minimum ${minText}.` : ''}` +
               (amt > fee ? ` You receive about ${money(amt - fee)} worth of USD.` : '');
 
-            // Show payment method details for bank transfers
-            const detailsBox = $('#wd-details-box', dlg);
-            if (m.method_type === 'bank') {
-              let bd = {};
-              try { bd = JSON.parse(m.bank_details || '{}'); } catch { /* ignore */ }
-              const rows = [
-                bd.bank_name && ['Bank name', bd.bank_name],
-                bd.account_holder && ['Account holder', bd.account_holder],
-                bd.account_number && ['Account number', bd.account_number],
-                bd.sort_code && ['Sort / Routing', bd.sort_code],
-                bd.iban && ['IBAN', bd.iban],
-                bd.swift && ['SWIFT / BIC', bd.swift],
-                bd.cvu && ['CVU', bd.cvu],
-                bd.alias && ['Alias', bd.alias],
-              ].filter(Boolean);
-              if (!detailsBox) {
-                const newBox = document.createElement('div');
-                newBox.id = 'wd-details-box';
-                newBox.className = 'rounded border border-line bg-sunken p-3 text-sm grid gap-1.5 mt-2';
-                const addressEl = $('#wd-address', dlg);
-                if (addressEl && addressEl.parentNode) {
-                  addressEl.parentNode.after(newBox);
-                } else if (recipientFields) {
-                  recipientFields.appendChild(newBox);
-                }
-              }
-              render($('#wd-details-box', dlg), html`
-                ${rows.map(([k, v]) => html`<div class="flex justify-between gap-4">
-                  <span class="text-muted flex-shrink-0">${k}</span>
-                  <span class="font-mono font-semibold text-right break-all">${v}</span>
-                </div>`)}
-                ${bd.reference_notes ? html`<p class="hint"><strong>Note:</strong> ${bd.reference_notes}</p>` : ''}`);
-            } else if (detailsBox) {
-              detailsBox.remove();
-            }
-            
             // Currency conversion preview
             if (currency && amt > 0) {
               const rateObj = fxRates.find((r) => r.currency === currency);

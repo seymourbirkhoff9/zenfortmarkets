@@ -75,7 +75,7 @@ export const languageButton = () => html`
     <button type="button" class="flex items-center gap-1 rounded p-2 text-muted hover:bg-sunken hover:text-ink" data-lang-toggle
       aria-haspopup="true" aria-expanded="false" aria-label="Translate this page" title="Translate this page">
       ${icon('globe')}<span class="hidden text-xs font-semibold uppercase xl:inline">${currentLanguage().split('-')[0]}</span></button>
-    <div class="panel absolute right-0 top-11 z-40 w-[min(15rem,calc(100vw-1.5rem))] p-1.5 shadow-xl" data-lang-menu hidden>
+    <div class="panel fixed inset-x-2 z-40 p-1.5 shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-11 sm:w-60" data-lang-menu hidden>
       <p class="px-3 pb-1 pt-2 text-xs text-muted">Translate this page (by Google Translate)</p>
       <ul class="max-h-72 overflow-y-auto" translate="no">${LANGUAGES.map(([code, name]) => html`<li>
         <button type="button" class="nav-link w-full justify-between ${code === currentLanguage() ? 'text-ink' : ''}" data-lang="${code}" lang="${code}">
