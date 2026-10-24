@@ -623,7 +623,7 @@ def test_admin_broadcast_sends_and_records_delivery(client, admin, make_user, mo
     monkeypatch.setattr(_mailer, "send_batch", lambda msgs: (_ for _ in ()).throw(RuntimeError("boom")))
     r = client.post("/api/admin/emails/broadcast", headers=admin, json={"subject": "Oops", "body": "x", "target_filter": "all"})
     log = next(l for l in client.get("/api/admin/emails/history", headers=admin).json() if l["id"] == r.json()["id"])
-    assert log["delivered_count"] == 0 and "boom" in log["last_error"]                # never stuck on "Sending…"
+    assert log["delivered_count"] == 0 and "server error" in log["last_error"]        # never stuck on "Sending…"
 
 
 def test_mailer_speaks_resend_api(monkeypatch):
@@ -645,7 +645,37 @@ def test_mailer_speaks_resend_api(monkeypatch):
     assert r.ok and seen["url"] == "https://api.resend.com/emails" and seen["auth"] == "Bearer re_live_123"
     assert seen["body"]["reply_to"] == "support@zenfortmarkets.online" and seen["body"]["text"] and seen["body"]["html"]
     bad = _mailer.send("blocked@x.dev", "Subject", "<p>x</p>")
-    assert not bad.ok and bad.reason.startswith("403") and "Verify your sending domain" in bad.reason
+    assert not bad.ok and "Verify the domain in Resend" in bad.reason and "403" not in bad.reason
+
+
+def test_batch_survives_bad_addresses(monkeypatch):
+    """Resend refuses a whole batch over one bad address; the good ones must still go out."""
+    import httpx
+    import json
+    sent = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        if req.url.path == "/emails/batch":
+            if any(m["to"] == ["bad@zenforttest.com"] for m in body):
+                return httpx.Response(422, json={"statusCode": 422, "name": "validation_error",
+                                                 "message": "Invalid `to` field. Please use our testing email address instead."})
+            sent.extend(m["to"][0] for m in body)
+            return httpx.Response(200, json={"data": []})
+        if body["to"] == ["bad@zenforttest.com"]:
+            return httpx.Response(422, json={"message": "Invalid `to` field. Please use our testing email address instead."})
+        sent.append(body["to"][0])
+        return httpx.Response(200, json={"id": "x"})
+
+    monkeypatch.setattr(_settings, "RESEND_API_KEY", "re_live_123")
+    monkeypatch.setattr(_settings, "DEV_OUTBOX", False)
+    monkeypatch.setattr(_mailer, "_client", httpx.Client(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(_mailer.time, "sleep", lambda s: None)
+    to = ["a@gmail.com", "user@example.com", "bad@zenforttest.com", "b@yahoo.com", "x@shop.test"]
+    res = _mailer.send_batch([{"to": t, "subject": "S", "html": "<p>x</p>"} for t in to])
+    assert [r.ok for r in res] == [True, False, False, True, False]
+    assert sorted(sent) == ["a@gmail.com", "b@yahoo.com"]                       # example.com / .test never sent
+    assert all("422" not in r.reason and "skipped" in r.reason for r in res if not r.ok)
 
 
 def test_support_requests(client, make_user, monkeypatch):

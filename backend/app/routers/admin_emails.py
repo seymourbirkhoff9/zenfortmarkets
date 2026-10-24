@@ -2,7 +2,7 @@
 app/routers/admin_emails.py — Admin email broadcast and targeted messaging
 """
 import logging
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 
@@ -31,6 +31,20 @@ def _in_app(db: Session, user: User, title: str, body: str) -> None:
     db.add(Notification(user_id=user.id, title=title, message=body[:2000], type="general", is_read=False))
 
 
+def _failure_summary(failed: List[tuple]) -> Optional[str]:
+    """[(email, reason)] → e.g. 'Skipped 3 test addresses (a@example.com, …). 1 failed: <reason>'."""
+    if not failed:
+        return None
+    by_reason: dict = {}
+    for email, reason in failed:
+        by_reason.setdefault(reason or "Unknown error", []).append(email)
+    parts = []
+    for reason, emails in by_reason.items():
+        sample = ", ".join(emails[:3]) + (f" and {len(emails) - 3} more" if len(emails) > 3 else "")
+        parts.append(f"{len(emails)} not delivered ({sample}): {reason}")
+    return " ".join(parts)[:2000]
+
+
 def _broadcast_emails_task(subject: str, body: str, target_filter: str, broadcast_log_id: str):
     """Background: in-app notice for everyone, then email in batches of 100; records delivered/failed."""
     db = SessionLocal()
@@ -48,13 +62,13 @@ def _broadcast_emails_task(subject: str, body: str, target_filter: str, broadcas
         db.commit()
 
         results = mailer.send_batch([{"to": u.email, "subject": subject, "html": _admin_html(u, subject, body)} for u in users])
-        failed = [r for r in results if not r.ok]
+        failed = [(u.email, r.reason) for u, r in zip(users, results) if not r.ok]
         log = db.query(BroadcastLog).filter(BroadcastLog.id == broadcast_log_id).first()
         if log:
             log.recipient_count = len(users)
             log.delivered_count = len(results) - len(failed)
             log.failed_count = len(failed)
-            log.last_error = failed[-1].reason if failed else None
+            log.last_error = _failure_summary(failed)
             db.commit()
         logger.info("Broadcast finished: %d recipients, %d failed", len(users), len(failed))
     except Exception as e:
@@ -65,7 +79,8 @@ def _broadcast_emails_task(subject: str, body: str, target_filter: str, broadcas
         if log:
             log.delivered_count = 0
             log.failed_count = max(log.recipient_count, 1)
-            log.last_error = f"Sending stopped: {e}"[:500]
+            log.last_error = "Sending stopped because of a server error. Nothing was delivered; please try again."
+            logger.error("Broadcast %s stopped: %s", broadcast_log_id, e)
             db.commit()
     finally:
         db.close()

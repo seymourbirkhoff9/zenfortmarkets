@@ -160,10 +160,8 @@ export default async function customer(outlet, { id }) {
         else if (sent) {
           toast('Added to their notifications, but the email wasn’t delivered.', 'warn');
           openDialog({ title: 'Email not delivered', body: html`
-            <p class="text-muted">The message is in their in-app notifications, but the email service refused it:</p>
-            <p class="rounded border border-line bg-sunken p-3 font-mono text-xs">${sent.email_error || 'Unknown reason'}</p>
-            <p class="text-sm text-muted">Most often this means your sending domain isn’t verified in Resend yet. Until it is,
-              Resend only delivers to your own Resend account address.</p>` });
+            <p class="text-muted">The message is in their in-app notifications, but the email didn’t go out:</p>
+            <p class="rounded border border-line bg-sunken p-3 text-sm">${sent.email_error || 'Unknown reason'}</p>` });
         }
       }
     } catch (err) { toastError(err); }
