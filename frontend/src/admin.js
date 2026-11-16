@@ -1,4 +1,5 @@
 import './styles.css';
+import { trackPageView } from './lib/tracker.js';
 import { api } from './lib/api.js';
 import { createRouter } from './lib/router.js';
 import { invalidate, prefetch } from './lib/cache.js';
@@ -16,6 +17,7 @@ import broadcast from './pages/admin/broadcast.js';
 import audit from './pages/admin/audit.js';
 import investments from './pages/admin/investments.js';
 import fx from './pages/admin/fx.js';
+import visitors from './pages/admin/visitors.js';
 
 const NAV = [
   { href: '#/', label: 'Overview', icon: 'home', match: '/' },
@@ -24,6 +26,7 @@ const NAV = [
   { href: '#/withdrawals', label: 'Withdrawals', icon: 'up', match: '/withdrawals', badge: 'withdrawals' },
   { href: '#/kyc', label: 'Identity checks', icon: 'id', match: '/kyc', badge: 'kyc' },
   { section: 'Records' },
+  { href: '#/visitors', label: 'Live Traffic', icon: 'globe', match: '/visitors' },
   { href: '#/customers', label: 'Customers', icon: 'users', match: '/customers' },
   { href: '#/investments', label: 'Investments', icon: 'chart', match: '/investments' },
   { href: '#/ledger', label: 'Ledger', icon: 'list', match: '/ledger' },
@@ -36,7 +39,7 @@ const NAV = [
 ];
 
 const TITLES = { '/': 'Overview', '/deposits': 'Deposits', '/withdrawals': 'Withdrawals', '/kyc': 'Identity checks',
-  '/customers': 'Customers', '/customers/:id': 'Customer', '/ledger': 'Ledger', '/audit': 'Audit log',
+  '/visitors': 'Live Traffic', '/customers': 'Customers', '/customers/:id': 'Customer', '/ledger': 'Ledger', '/audit': 'Audit log',
   '/plans': 'Investment plans', '/investments': 'Investments', '/methods': 'Payment methods', '/fx': 'FX Rates', '/broadcast': 'Email customers' };
 
 (async () => {
@@ -63,7 +66,7 @@ const TITLES = { '/': 'Overview', '/deposits': 'Deposits', '/withdrawals': 'With
 
   createRouter({
     '/': overview, '/deposits': depositsQueue, '/withdrawals': withdrawalsQueue, '/kyc': kyc,
-    '/customers': customers, '/customers/:id': customer, '/ledger': ledger, '/audit': audit,
+    '/visitors': visitors, '/customers': customers, '/customers/:id': customer, '/ledger': ledger, '/audit': audit,
     '/plans': plans, '/investments': investments, '/methods': methods, '/fx': fx, '/broadcast': broadcast, '*': overview,
-  }, { onRoute: (pattern, path) => { shell.setActive(path); document.title = `${TITLES[pattern] || 'Overview'} — Zenfort operations`; } }).start();
+  }, { onRoute: (pattern, path) => { shell.setActive(path); document.title = `${TITLES[pattern] || 'Overview'} — Zenfort operations`; trackPageView(path); } }).start();
 })();

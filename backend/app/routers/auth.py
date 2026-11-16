@@ -27,6 +27,7 @@ from app.security import (
 )
 from app.services.admin_alerts import notify_admins
 from app.services.email_templates import render_email
+from app.services.email_translations import get_string, translate_phrase
 from app.services.notification_service import queue_email
 from app.services import ratelimit, storage, twofactor
 from app.services.ratelimit import client_ip
@@ -49,11 +50,16 @@ def _generate_unique_referral_code(db: Session) -> str:
 def _send_verification(user: User) -> None:
     token = create_purpose_token(user.email, VERIFY_PURPOSE, VERIFY_MINUTES)
     link = f"{settings.FRONTEND_URL.rstrip('/')}/verify-email.html?token={token}"
-    queue_email(user.email, "Confirm your email — Zenfort Markets",
-                render_email("Confirm your email", user.full_name,
-                             ["Confirm this address so we can reach you about deposits and withdrawals.",
-                              "The link expires in 24 hours."],
-                             cta=("Confirm email", link)))
+    lang = getattr(user, "preferred_language", "en") or "en"
+    title = get_string("confirm_email_title", lang=lang)
+    p1 = get_string("confirm_email_p1", lang=lang)
+    p2 = get_string("confirm_email_p2", lang=lang)
+    cta_label = get_string("confirm_email_cta", lang=lang)
+    queue_email(user.email, f"{title} — Zenfort Markets",
+                render_email(title, user.full_name,
+                             [p1, p2],
+                             cta=(cta_label, link),
+                             lang=lang))
 
 
 # ── Sign up / sessions ────────────────────────
@@ -86,10 +92,11 @@ def signup(payload: SignUpRequest, db: Session = Depends(get_db)):
             logging.getLogger("zenfort.auth").warning(f"Failed to derive display_currency from country {payload.country}: {e}")
             display_currency = "USD"
 
+    lang = (payload.preferred_language or "en").strip().lower()[:10]
     user = User(
         email=email, full_name=payload.full_name.strip(), hashed_password=hash_password(payload.password),
         country=payload.country.value if hasattr(payload.country, "value") else payload.country,
-        phone=payload.phone, display_currency=display_currency,
+        phone=payload.phone, display_currency=display_currency, preferred_language=lang,
         is_active=True, is_admin=False, is_verified=False, email_verified=False,
         referral_code=_generate_unique_referral_code(db),
         referred_by_id=referrer.id if referrer else None,
@@ -163,10 +170,15 @@ def login_two_factor(payload: TwoFactorLogin, response: Response, db: Session = 
             raise HTTPException(status_code=400, detail="That code isn’t right. Check your authenticator app and try again.")
         user.recovery_codes = remaining_codes
         left = twofactor.remaining(remaining_codes)
-        queue_email(user.email, "A recovery code was used — Zenfort Markets",
-                    render_email("A recovery code was used", user.full_name,
-                                 [f"You signed in with a recovery code. You have {left} left.",
-                                  "If this wasn’t you, reset your password now and contact support."]))
+        lang = getattr(user, "preferred_language", "en") or "en"
+        title = translate_phrase("A recovery code was used", lang=lang)
+        p1 = translate_phrase(f"You signed in with a recovery code. You have {left} left.", lang=lang)
+        p2 = get_string("pwd_changed_p2", lang=lang)
+        queue_email(user.email, f"{title} — Zenfort Markets",
+                    render_email(title, user.full_name,
+                                 [p1, p2],
+                                 cta=(get_string("pwd_changed_cta", lang=lang), f"{settings.FRONTEND_URL.rstrip('/')}/forgot-password.html"),
+                                 lang=lang))
     db.commit()
     ratelimit.reset(f"2fa:{email}")
     return _start_session(response, user)
@@ -242,6 +254,7 @@ class ProfileUpdate(BaseModel):
     full_name: Optional[str] = None
     phone: Optional[str] = None
     display_currency: Optional[str] = None  # User's preferred display currency (3-10 uppercase letters)
+    preferred_language: Optional[str] = None  # User's preferred email language (e.g., "en", "es", "fr")
 
     @field_validator("full_name")
     @classmethod
@@ -281,6 +294,8 @@ def update_profile(payload: ProfileUpdate, current_user: User = Depends(get_curr
         current_user.phone = payload.phone.strip() or None
     if payload.display_currency is not None:
         current_user.display_currency = payload.display_currency.upper().strip()[:10]
+    if payload.preferred_language is not None:
+        current_user.preferred_language = payload.preferred_language.strip().lower()[:10] or "en"
     db.commit()
     db.refresh(current_user)
     return current_user
@@ -302,9 +317,15 @@ def change_password(payload: PasswordChange, response: Response, current_user: U
 
 
 def _security_email(user: User, heading: str, line: str) -> None:
-    queue_email(user.email, f"{heading} — Zenfort Markets",
-                render_email(heading, user.full_name, [line, "If this wasn’t you, reset your password now and contact support."],
-                             cta=("Reset password", f"{settings.FRONTEND_URL.rstrip('/')}/forgot-password.html")))
+    lang = getattr(user, "preferred_language", "en") or "en"
+    translated_heading = translate_phrase(heading, lang=lang)
+    translated_line = translate_phrase(line, lang=lang)
+    sub_note = get_string("pwd_changed_p2", lang=lang)
+    cta_label = get_string("pwd_changed_cta", lang=lang)
+    queue_email(user.email, f"{translated_heading} — Zenfort Markets",
+                render_email(translated_heading, user.full_name, [translated_line, sub_note],
+                             cta=(cta_label, f"{settings.FRONTEND_URL.rstrip('/')}/forgot-password.html"),
+                             lang=lang))
 
 
 # ── Password reset by email ───────────────────
@@ -345,11 +366,16 @@ def forgot_password(payload: ForgotPassword, request: Request, db: Session = Dep
                             "exp": datetime.now(timezone.utc) + timedelta(minutes=RESET_MINUTES)},
                            settings.SECRET_KEY, algorithm=settings.ALGORITHM)
         link = f"{settings.FRONTEND_URL.rstrip('/')}/reset-password.html?token={token}"
-        queue_email(user.email, "Reset your password — Zenfort Markets",
-                    render_email("Reset your password", user.full_name,
-                                 ["We received a request to reset your password. The link works once and expires in 30 minutes.",
-                                  "If you didn’t ask for this, you can ignore this email; your password stays the same."],
-                                 cta=("Choose a new password", link)))
+        lang = getattr(user, "preferred_language", "en") or "en"
+        title = get_string("reset_pwd_title", lang=lang)
+        p1 = get_string("reset_pwd_p1", lang=lang)
+        p2 = get_string("reset_pwd_p2", lang=lang)
+        cta_label = get_string("reset_pwd_cta", lang=lang)
+        queue_email(user.email, f"{title} — Zenfort Markets",
+                    render_email(title, user.full_name,
+                                 [p1, p2],
+                                 cta=(cta_label, link),
+                                 lang=lang))
     return {"status": "sent", "message": "If an account uses that email, we’ve sent a reset link. Check your inbox and spam folder."}
 
 

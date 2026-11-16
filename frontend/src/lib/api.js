@@ -220,5 +220,6 @@ export const api = {
     updateFxRate: (currency, payload) => patch(`/admin/fx/rates/${currency}`, payload),
     deleteFxRate: (currency) => del(`/admin/fx/rates/${currency}`),
     refreshFxRates: () => post('/admin/fx/refresh'),
+    visitors: () => get('/admin/visitors'),
   },
 };

@@ -19,19 +19,21 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models import (
-    AuditLog, FxRate, InvestmentPlan, KYCStatus, PaymentMethod, Transaction, User, UserInvestment, Wallet,
+    AuditLog, FxRate, InvestmentPlan, KYCStatus, PaymentMethod, SiteVisitor, Transaction, User, UserInvestment, VisitorPageView, Wallet,
 )
 from app.schemas import (
     AdminCreditRequest, AdminDebitRequest, AdminDepositReviewRequest, AdminKYCReviewRequest,
-    AdminStats, AdminTransactionOut, AdminUserDetail, AdminUserStatusUpdate,
+    AdminStats, AdminTransactionOut, AdminUserDetail, AdminUserStatusUpdate, AdminVisitorsResponse,
     AdminWithdrawalReviewRequest, AuditLogResponse, InvestmentPlanCreate, InvestmentPlanResponse,
-    InvestmentPlanUpdate, PaymentMethodCreate, PaymentMethodOut, PaymentMethodUpdate, RoleUpdate, UserOut, UserPage,
+    InvestmentPlanUpdate, PaymentMethodCreate, PaymentMethodOut, PaymentMethodUpdate, RoleUpdate, TopPageItem,
+    UserOut, UserPage, VisitorItem,
 )
 from app.security import (
     ADMIN_COOKIE, IMPERSONATION_MINUTES, SESSION_COOKIE, _extract_token, create_impersonation_token,
     get_current_admin, set_cookie,
 )
 from app.services.email_templates import render_email, usd
+from app.services.email_translations import translate_phrase
 from app.services.ledger import credit, debit, lock_wallet, lock_wallet_by_id, money
 from app.services.notification_service import send_notification_and_email
 from app.services.referral_service import process_referral_milestone
@@ -57,13 +59,16 @@ _CTA = {"deposit": "#/wallet", "withdrawal": "#/wallet?tab=withdrawal", "kyc": "
 
 def _notify(db: Session, user: User, title: str, message: str, kind: str,
             extra: Optional[List[str]] = None, rows: Optional[List[Tuple[str, str]]] = None):
-    """In-app notification + branded email. `rows` become the email's details table."""
+    """In-app notification + branded email in recipient's preferred language. `rows` become the email's details table."""
+    lang = getattr(user, "preferred_language", "en") or "en"
+    translated_title = translate_phrase(title, lang=lang)
+    translated_message = translate_phrase(message, lang=lang)
     link = f"{settings.FRONTEND_URL.rstrip('/')}/app.html{_CTA.get(kind, '#/')}"
     send_notification_and_email(
-        db=db, user=user, title=title, message=message, notification_type=kind,
-        email_subject=f"{title} — Zenfort Markets",
+        db=db, user=user, title=translated_title, message=translated_message, notification_type=kind,
+        email_subject=f"{translated_title} — Zenfort Markets",
         email_html=render_email(title, user.full_name, [message, *(extra or [])], rows=rows,
-                                cta=("Open your account", link)),
+                                cta=("Open your account", link), lang=lang),
     )
 
 
@@ -910,3 +915,65 @@ def refresh_fx_rates(admin=Depends(get_current_admin), db: Session = Depends(get
         return {"status": "success", "message": "Rates refreshed successfully."}
     else:
         return {"status": "failed", "message": "Failed to refresh rates. Old values kept."}
+
+
+# ──────────────────────────────────────────────
+# Site Visitors / Real-time Traffic
+# ──────────────────────────────────────────────
+@router.get("/visitors", response_model=AdminVisitorsResponse)
+def get_visitors(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Retrieve real-time active visitors, daily metrics, top visited pages, and recent visitor logs."""
+    now = datetime.now(timezone.utc)
+    five_mins_ago = now - timedelta(minutes=5)
+    start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    active_now = db.query(func.count(SiteVisitor.id)).filter(SiteVisitor.last_seen_at >= five_mins_ago).scalar() or 0
+    today_visitors = db.query(func.count(SiteVisitor.id)).filter(SiteVisitor.last_seen_at >= start_of_today).scalar() or 0
+    today_page_views = db.query(func.count(VisitorPageView.id)).filter(VisitorPageView.created_at >= start_of_today).scalar() or 0
+
+    top_rows = (
+        db.query(VisitorPageView.path, func.count(VisitorPageView.id).label("views"))
+        .filter(VisitorPageView.created_at >= start_of_today)
+        .group_by(VisitorPageView.path)
+        .order_by(func.count(VisitorPageView.id).desc())
+        .limit(6)
+        .all()
+    )
+    top_pages = [TopPageItem(path=r[0], views=r[1]) for r in top_rows]
+
+    visitors = (
+        db.query(SiteVisitor)
+        .order_by(SiteVisitor.last_seen_at.desc())
+        .limit(100)
+        .all()
+    )
+
+    items = []
+    for v in visitors:
+        user_email = v.user.email if v.user else None
+        user_name = v.user.full_name if v.user else None
+        is_online = bool(v.last_seen_at and v.last_seen_at >= five_mins_ago)
+        items.append(VisitorItem(
+            visitor_id=v.visitor_id,
+            user_id=str(v.user_id) if v.user_id else None,
+            user_email=user_email,
+            user_name=user_name,
+            ip_address=v.ip_address,
+            country=v.country,
+            current_path=v.current_path,
+            device_type=v.device_type,
+            referrer=v.referrer,
+            first_seen_at=v.first_seen_at,
+            last_seen_at=v.last_seen_at,
+            page_views=v.page_views,
+            is_online=is_online,
+        ))
+
+    return AdminVisitorsResponse(
+        active_now=active_now,
+        today_visitors=today_visitors,
+        today_page_views=today_page_views,
+        top_pages=top_pages,
+        recent_visitors=items,
+    )
+

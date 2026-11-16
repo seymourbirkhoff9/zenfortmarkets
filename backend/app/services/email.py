@@ -5,6 +5,8 @@ app/services/email.py — Resend transactional email service
 import logging
 import resend
 from app.config import settings
+from app.services.email_templates import render_email
+from app.services.email_translations import get_string
 
 logger = logging.getLogger("zenfort.email")
 
@@ -18,33 +20,33 @@ def _api_key_present() -> bool:
     return bool(key) and not key.startswith("re_XXXX")
 
 
-def send_welcome_email(to_email: str, full_name: str) -> None:
-    """Send a welcome email to newly registered users."""
+def send_welcome_email(to_email: str, full_name: str, lang: str = "en") -> None:
+    """Send a welcome email to newly registered users in their preferred language."""
     if not _api_key_present():
         logger.info(
-            "[Mock Email] send_welcome_email → to=%s  subject='Welcome to Zenfort Markets'",
+            "[Mock Email] send_welcome_email → to=%s  lang=%s  subject='Welcome to Zenfort Markets'",
             to_email,
+            lang,
         )
         return
 
     try:
+        title = get_string("welcome_title", lang=lang)
+        p1 = get_string("welcome_p1", lang=lang)
+        html_body = render_email(
+            title,
+            full_name,
+            [p1],
+            cta=(get_string("open_account", lang=lang), f"{settings.FRONTEND_URL.rstrip('/')}/login.html"),
+            lang=lang,
+        )
         resend.Emails.send({
             "from": settings.EMAIL_FROM,
             "to": [to_email],
-            "subject": "Welcome to Zenfort Markets",
-            "html": f"""
-            <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;">
-              <h2 style="color:#1a1a3e;">Welcome to Zenfort Markets, {full_name}!</h2>
-              <p>Your account has been created successfully. You can now log in and explore
-                 our multi-currency crypto investment platform.</p>
-              <p>If you have any questions, reach out to <a href="mailto:support@zenfortmarkets.com">
-                 support@zenfortmarkets.com</a>.</p>
-              <hr/>
-              <small style="color:#888;">Zenfort Markets — Trade Smarter. Grow Stronger.</small>
-            </div>
-            """,
+            "subject": f"{title} — Zenfort Markets",
+            "html": html_body,
         })
-        logger.info("Welcome email sent → %s", to_email)
+        logger.info("Welcome email sent → %s (%s)", to_email, lang)
     except Exception as e:
         logger.error("Failed to send welcome email to %s: %s", to_email, e)
 

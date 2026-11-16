@@ -25,6 +25,7 @@ from app.services.admin_alerts import notify_admins
 from app.services.ledger import credit, debit, lock_wallet, money
 from app.services.notification_service import queue_email
 from app.services.email_templates import render_email, usd
+from app.services.email_translations import translate_phrase
 from app.services import storage
 from app.services.serializers import tx_view
 from app.utils.uploads import IMAGE_TYPES, validate_data_url
@@ -144,10 +145,13 @@ def p2p_transfer(payload: P2PTransferRequest,
     amount_text = usd(amount)
     if tx.input_currency and tx.input_amount:
         amount_text = f"{tx.input_amount:,.2f} {tx.input_currency} (~{usd(amount)})"
-    queue_email(recipient.email, f"You received {usd(amount)}",
+    recip_lang = getattr(recipient, "preferred_language", "en") or "en"
+    translated_subject = translate_phrase(f"You received {usd(amount)}", lang=recip_lang)
+    queue_email(recipient.email, f"{translated_subject} — Zenfort Markets",
                 render_email("Funds received", recipient.full_name,
                              [f"{current_user.full_name} sent you {amount_text}.",
-                              "It is already in your Main wallet."]))
+                              "It is already in your Main wallet."],
+                             lang=recip_lang))
     return tx_view(tx, [sender_w.id])
 
 
