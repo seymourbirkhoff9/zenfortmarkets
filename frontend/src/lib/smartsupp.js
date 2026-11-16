@@ -16,8 +16,27 @@ export function initSmartsupp(user = null) {
 
     window._smartsupp = window._smartsupp || {};
     window._smartsupp.key = SMARTSUPP_KEY;
-    // Offset slightly above the built-in Help button so both remain accessible
-    window._smartsupp.offsetY = 72;
+    // Hide the chat widget completely so it never conflicts with the built-in Help chatbot
+    // Smartsupp will continue tracking visitors and sending push alerts in invisible mode
+    window._smartsupp.hideWidget = true;
+
+    // Bulletproof CSS safeguard to keep the widget hidden from the UI
+    if (!document.getElementById('smartsupp-hidden-style')) {
+      const style = document.createElement('style');
+      style.id = 'smartsupp-hidden-style';
+      style.textContent = `
+        #chat-application-iframe,
+        #smartsupp-widget-container,
+        iframe[src*="smartsupp"],
+        div[class*="smartsupp"] {
+          display: none !important;
+          visibility: hidden !important;
+          opacity: 0 !important;
+          pointer-events: none !important;
+        }
+      `;
+      document.head.appendChild(style);
+    }
 
     window.smartsupp || (function(d) {
       var s, c, o = window.smartsupp = function() { o._.push(arguments); };
@@ -34,6 +53,10 @@ export function initSmartsupp(user = null) {
         d.head.appendChild(c);
       }
     })(document);
+
+    try {
+      window.smartsupp('chat:hide');
+    } catch {}
   }
 
   // Identify logged in user if available
