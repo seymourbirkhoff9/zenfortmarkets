@@ -1,5 +1,6 @@
 import '../../styles.css';
 import '../../lib/tracker.js';
+import '../../lib/smartsupp.js';
 import { html, render } from '../../lib/dom.js';
 import { themeButton, wireThemeButton } from '../../lib/theme.js';
 import { initTranslation, languageButton, wireLanguageButtons } from '../../lib/translate.js';

@@ -1,5 +1,6 @@
 import './styles.css';
 import { trackPageView } from './lib/tracker.js';
+import { initSmartsupp, trackSmartsuppRoute } from './lib/smartsupp.js';
 import { api } from './lib/api.js';
 import { createRouter } from './lib/router.js';
 import { mountShell } from './shell.js';
@@ -26,12 +27,19 @@ const NAV = [
   if (!location.hash || location.hash === '#/') prefetch('dashboard', api.me.dashboard);
   const user = await api.auth.me();          // 401 → redirected to sign in
   session.user = user;
+  initSmartsupp(user);
   const shell = mountShell({ area: 'user', user, nav: NAV });
   const titles = { '/': 'Overview', '/wallet': 'Deposits & withdrawals', '/invest': 'Invest',
     '/activity': 'Activity', '/referrals': 'Referrals', '/settings': 'Settings' };
   createRouter(
     { '/': overview, '/wallet': wallet, '/invest': invest, '/activity': activity,
       '/referrals': referrals, '/settings': settings, '*': overview },
-    { onRoute: (pattern, path) => { shell.setActive(path); document.title = `${titles[pattern] || 'Overview'} — Zenfort Markets`; trackPageView(path); } },
+    { onRoute: (pattern, path) => {
+        shell.setActive(path);
+        document.title = `${titles[pattern] || 'Overview'} — Zenfort Markets`;
+        trackPageView(path);
+        trackSmartsuppRoute(path);
+      }
+    },
   ).start();
 })();
