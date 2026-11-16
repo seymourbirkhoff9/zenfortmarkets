@@ -14,6 +14,7 @@ from app.config import settings
 from app.models import Notification
 from app.services import mailer
 from app.services.email_templates import render_email
+from app.services.email_translations import translate_phrase
 from app.database import SessionLocal
 
 logger = logging.getLogger("zenfort.admin_emails")
@@ -22,9 +23,16 @@ router = APIRouter(prefix="/api/admin/emails", tags=["Admin Emails"])
 
 
 def _admin_html(user: User, subject: str, body: str) -> str:
-    # Admin text is rendered as escaped paragraphs, never as raw HTML.
-    return render_email(subject, user.full_name, [p.strip() for p in body.split("\n\n") if p.strip()],
-                        cta=("Open your account", f"{settings.FRONTEND_URL.rstrip('/')}/app.html"))
+    # Admin text is rendered as escaped paragraphs in recipient's preferred language.
+    lang = getattr(user, "preferred_language", "en") or "en"
+    paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+    return render_email(
+        subject,
+        user.full_name,
+        paragraphs,
+        cta=("Open your account", f"{settings.FRONTEND_URL.rstrip('/')}/app.html"),
+        lang=lang,
+    )
 
 
 def _in_app(db: Session, user: User, title: str, body: str) -> None:
@@ -58,10 +66,18 @@ def _broadcast_emails_task(subject: str, body: str, target_filter: str, broadcas
             query = query.join(UserInvestment).filter(UserInvestment.status == "active").distinct()
         users = query.all()
         for u in users:
-            _in_app(db, u, "New announcement", body)
+            u_lang = getattr(u, "preferred_language", "en") or "en"
+            _in_app(db, u, translate_phrase("New announcement", lang=u_lang), translate_phrase(body, lang=u_lang))
         db.commit()
 
-        results = mailer.send_batch([{"to": u.email, "subject": subject, "html": _admin_html(u, subject, body)} for u in users])
+        results = mailer.send_batch([
+            {
+                "to": u.email,
+                "subject": translate_phrase(subject, lang=getattr(u, "preferred_language", "en") or "en"),
+                "html": _admin_html(u, subject, body),
+            }
+            for u in users
+        ])
         failed = [(u.email, r.reason) for u, r in zip(users, results) if not r.ok]
         log = db.query(BroadcastLog).filter(BroadcastLog.id == broadcast_log_id).first()
         if log:
@@ -100,9 +116,12 @@ def send_email_to_user(payload: AdminSendUserEmailRequest, admin=Depends(get_cur
         raise HTTPException(status_code=404, detail="Customer not found.")
     if user.is_admin:
         raise HTTPException(status_code=400, detail="Admins can’t be emailed from here.")
-    _in_app(db, user, "Message from support", payload.body)
+    lang = getattr(user, "preferred_language", "en") or "en"
+    translated_subject = translate_phrase(payload.subject, lang=lang)
+    translated_body = translate_phrase(payload.body, lang=lang)
+    _in_app(db, user, translate_phrase("Message from support", lang=lang), translated_body)
     db.commit()
-    result = mailer.send(user.email, payload.subject, _admin_html(user, payload.subject, payload.body))
+    result = mailer.send(user.email, translated_subject, _admin_html(user, payload.subject, payload.body))
     return {"in_app": True, "email_sent": result.ok, "email_error": result.reason,
             "message": "Delivered to their inbox and their notifications." if result.ok
             else "Added to their notifications, but the email wasn’t delivered."}

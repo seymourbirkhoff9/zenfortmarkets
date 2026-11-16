@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Transaction, User
 from app.services.email_templates import render_email, usd
+from app.services.email_translations import translate_phrase
 from app.services.ledger import credit, lock_wallet, money
 from app.services.notification_service import send_notification_and_email
 
@@ -58,9 +59,12 @@ def _pay_bonus(db: Session, user: User, milestone_type: str) -> None:
     db.commit()
 
     msg = f"You earned {usd(bonus)} because {user.full_name} made their {event}."
+    ref_lang = getattr(referrer, "preferred_language", "en") or "en"
+    translated_title = translate_phrase("Referral bonus earned", lang=ref_lang)
+    translated_msg = translate_phrase(msg, lang=ref_lang)
     send_notification_and_email(
-        db=db, user=referrer, title="Referral bonus earned", message=msg, notification_type="referral",
-        email_subject="Referral bonus earned — Zenfort Markets",
+        db=db, user=referrer, title=translated_title, message=translated_msg, notification_type="referral",
+        email_subject=f"{translated_title} — Zenfort Markets",
         email_html=render_email("Referral bonus earned", referrer.full_name,
-                                [msg, "It's already in your Main wallet."]),
+                                [msg, "It's already in your Main wallet."], lang=ref_lang),
     )

@@ -11,6 +11,7 @@ from html import escape, unescape
 from typing import List, Optional, Sequence, Tuple
 
 from app.config import settings
+from app.services.email_translations import get_string, normalize_language, translate_phrase
 
 NAVY, BRASS, INK, MUTED, LINE, PAPER = "#14243B", "#A8781F", "#1C2633", "#5F6B7A", "#DCE2E9", "#F5F7F9"
 SANS = "-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
@@ -29,7 +30,8 @@ def _site(path: str = "") -> str:
 def render_email(heading: str, name: str, paragraphs: Sequence[str],
                  cta: Optional[Tuple[str, str]] = None,
                  rows: Optional[List[Tuple[str, str]]] = None,
-                 preheader: Optional[str] = None) -> str:
+                 preheader: Optional[str] = None,
+                 lang: str = "en") -> str:
     """
     heading     big title, e.g. "Deposit approved"
     name        recipient's name for the greeting
@@ -37,14 +39,19 @@ def render_email(heading: str, name: str, paragraphs: Sequence[str],
     cta         optional (button label, absolute URL)
     rows        optional details table, e.g. [("Amount", "$200.00"), ("Method", "USDT (TRC20)")]
     preheader   optional inbox preview text (defaults to the first paragraph)
+    lang        language code for localized content & chrome, e.g. "en", "es", "fr"
     """
-    pre = escape(preheader or (paragraphs[0] if paragraphs else heading))
+    lang = normalize_language(lang)
+    translated_heading = translate_phrase(heading, lang=lang)
+    translated_paragraphs = [translate_phrase(p, lang=lang) for p in paragraphs]
+
+    pre = escape(preheader or (translated_paragraphs[0] if translated_paragraphs else translated_heading))
     body = "".join(
-        f'<p style="margin:0 0 14px;font:15px/1.6 {SANS};color:{INK};">{escape(p)}</p>' for p in paragraphs)
+        f'<p style="margin:0 0 14px;font:15px/1.6 {SANS};color:{INK};">{escape(p)}</p>' for p in translated_paragraphs)
     table = ""
     if rows:
         cells = "".join(
-            f'<tr><td style="padding:10px 0;border-top:1px solid {LINE};font:14px {SANS};color:{MUTED};">{escape(k)}</td>'
+            f'<tr><td style="padding:10px 0;border-top:1px solid {LINE};font:14px {SANS};color:{MUTED};">{escape(translate_phrase(k, lang=lang))}</td>'
             f'<td align="right" style="padding:10px 0;border-top:1px solid {LINE};font:600 14px {SANS};color:{INK};'
             f'word-break:break-all;">{escape(v)}</td></tr>' for k, v in rows)
         table = (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
@@ -52,14 +59,24 @@ def render_email(heading: str, name: str, paragraphs: Sequence[str],
     button = ""
     if cta:
         label, url = cta
+        translated_label = translate_phrase(label, lang=lang)
         button = (
             f'<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 22px;"><tr>'
             f'<td style="background:{NAVY};border-radius:6px;">'
             f'<a href="{escape(url, quote=True)}" style="display:inline-block;padding:12px 22px;font:600 15px {SANS};'
-            f'color:#ffffff;text-decoration:none;">{escape(label)}</a></td></tr></table>')
+            f'color:#ffffff;text-decoration:none;">{escape(translated_label)}</a></td></tr></table>')
+
+    greeting_str = get_string("greeting", lang=lang, name=name)
+    support_str = get_string("support_line", lang=lang)
+    your_account_str = get_string("your_account", lang=lang)
+    footer_disclaimer = get_string("footer_disclaimer", lang=lang)
+    terms_str = get_string("terms", lang=lang)
+    privacy_str = get_string("privacy", lang=lang)
+    risk_str = get_string("risk", lang=lang)
+
     return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light"><title>{escape(heading)}</title></head>
+<html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light"><title>{escape(translated_heading)}</title></head>
 <body style="margin:0;padding:0;background:{PAPER};">
 <span style="display:none!important;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden;">{pre}</span>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{PAPER};"><tr><td align="center" style="padding:28px 12px;">
@@ -71,17 +88,17 @@ def render_email(heading: str, name: str, paragraphs: Sequence[str],
       </tr></table></td></tr>
     <tr><td style="height:3px;background:{BRASS};font-size:0;line-height:0;">&nbsp;</td></tr>
     <tr><td style="background:#ffffff;border:1px solid {LINE};border-top:0;border-radius:0 0 10px 10px;padding:30px 28px 24px;">
-      <h1 style="margin:0 0 18px;font:400 26px/1.25 {SERIF};color:{INK};">{escape(heading)}</h1>
-      <p style="margin:0 0 14px;font:15px/1.6 {SANS};color:{INK};">Hi {escape(name)},</p>
+      <h1 style="margin:0 0 18px;font:400 26px/1.25 {SERIF};color:{INK};">{escape(translated_heading)}</h1>
+      <p style="margin:0 0 14px;font:15px/1.6 {SANS};color:{INK};">{escape(greeting_str)}</p>
       {body}{table}{button}
-      <p style="margin:18px 0 0;font:13px/1.6 {SANS};color:{MUTED};">Questions? Reply to this email or visit
-        <a href="{escape(_site('/'), quote=True)}" style="color:{NAVY};">your account</a>.</p>
+      <p style="margin:18px 0 0;font:13px/1.6 {SANS};color:{MUTED};">{escape(support_str)}
+        <a href="{escape(_site('/'), quote=True)}" style="color:{NAVY};">{escape(your_account_str)}</a>.</p>
     </td></tr>
     <tr><td style="padding:18px 8px 0;font:12px/1.6 {SANS};color:{MUTED};text-align:center;">
-      You’re receiving this because you have an account at Zenfort Markets.<br>
-      <a href="{escape(_site('/terms.html'), quote=True)}" style="color:{MUTED};">Terms</a> &nbsp;|&nbsp;
-      <a href="{escape(_site('/privacy.html'), quote=True)}" style="color:{MUTED};">Privacy</a> &nbsp;|&nbsp;
-      <a href="{escape(_site('/risk.html'), quote=True)}" style="color:{MUTED};">Risk Disclosure</a>
+      {escape(footer_disclaimer)}<br>
+      <a href="{escape(_site('/terms.html'), quote=True)}" style="color:{MUTED};">{escape(terms_str)}</a> &nbsp;|&nbsp;
+      <a href="{escape(_site('/privacy.html'), quote=True)}" style="color:{MUTED};">{escape(privacy_str)}</a> &nbsp;|&nbsp;
+      <a href="{escape(_site('/risk.html'), quote=True)}" style="color:{MUTED};">{escape(risk_str)}</a>
     </td></tr>
   </table>
 </td></tr></table>

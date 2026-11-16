@@ -1,4 +1,5 @@
 import '../../styles.css';
+import '../../lib/tracker.js';
 import { html, raw, render } from '../../lib/dom.js';
 import { SITE } from '../../site.js';
 import { api } from '../../lib/api.js';

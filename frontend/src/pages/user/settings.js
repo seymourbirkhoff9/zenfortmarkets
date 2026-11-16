@@ -8,6 +8,7 @@ import { pageHeader } from '../common.js';
 import { passwordToggles } from '../../lib/password.js';
 import { twoFactorSection } from './twofactor.js';
 import { CURRENCIES } from '../../lib/currencies.js';
+import { LANGUAGES } from '../../lib/translate.js';
 
 const KYC = {
   UNVERIFIED: ['pill-neutral', 'Not started'],
@@ -51,6 +52,11 @@ export default async function settings(outlet) {
               ${CURRENCIES.map((c) => html`<option value="${c.code}" ${u.display_currency === c.code ? 'selected' : ''}>${c.code} - ${c.name}</option>`)}
             </select>
             <p class="hint">Choose your preferred currency for displaying balances and amounts.</p></div>
+          <div class="field"><label class="label" for="s-lang">Email & notification language</label>
+            <select class="input" id="s-lang" name="preferred_language">
+              ${LANGUAGES.map(([code, name]) => html`<option value="${code}" ${(u.preferred_language || 'en') === code ? 'selected' : ''}>${name} (${code})</option>`)}
+            </select>
+            <p class="hint">Transactional emails, account alerts and receipts will be sent in this language.</p></div>
           <div class="field"><span class="label">Email</span>
             <p class="text-sm">${u.email} ${u.email_verified ? html`<span class="pill-settled ml-1">Confirmed</span>`
               : html`<span class="pill-pending ml-1">Not confirmed</span> <button type="button" class="btn-link ml-2" data-action="resend">Send link</button>`}</p></div>
@@ -99,7 +105,8 @@ export default async function settings(outlet) {
       await api.auth.updateMe({ 
         full_name: e.target.full_name.value.trim(), 
         phone: e.target.phone.value.trim(),
-        display_currency: e.target.display_currency.value
+        display_currency: e.target.display_currency.value,
+        preferred_language: e.target.preferred_language.value
       }); 
       await refreshUser(); 
       toast('Profile saved.'); 

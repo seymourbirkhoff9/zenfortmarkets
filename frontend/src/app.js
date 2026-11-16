@@ -1,4 +1,5 @@
 import './styles.css';
+import { trackPageView } from './lib/tracker.js';
 import { api } from './lib/api.js';
 import { createRouter } from './lib/router.js';
 import { mountShell } from './shell.js';
@@ -31,6 +32,6 @@ const NAV = [
   createRouter(
     { '/': overview, '/wallet': wallet, '/invest': invest, '/activity': activity,
       '/referrals': referrals, '/settings': settings, '*': overview },
-    { onRoute: (pattern, path) => { shell.setActive(path); document.title = `${titles[pattern] || 'Overview'} — Zenfort Markets`; } },
+    { onRoute: (pattern, path) => { shell.setActive(path); document.title = `${titles[pattern] || 'Overview'} — Zenfort Markets`; trackPageView(path); } },
   ).start();
 })();

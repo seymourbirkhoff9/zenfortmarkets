@@ -3,6 +3,7 @@ import { $, html, render } from '../../lib/dom.js';
 import { authLayout, processAside } from './layout.js';
 import { passwordToggles } from '../../lib/password.js';
 import { CURRENCIES, COUNTRY_CURRENCY } from '../../lib/currencies.js';
+import { currentLanguage } from '../../lib/translate.js';
 
 // Must match backend CountryEnum values.
 const COUNTRIES = ['Argentina','Australia','Austria','Bangladesh','Belgium','Brazil','Cameroon','Canada','China','Denmark','Egypt','Ethiopia','Finland','France','Germany','Ghana','Greece','India','Indonesia','Ireland','Italy','Ivory Coast','Japan','Kenya','Malaysia','Mexico','Netherlands','New Zealand','Nigeria','Norway','Pakistan','Philippines','Poland','Portugal','Russia','Saudi Arabia','Senegal','Singapore','South Africa','Spain','Sweden','Switzerland','Tanzania','Thailand','Turkey','Ukraine','United Arab Emirates','United Kingdom','United States','Vietnam','Zambia','Zimbabwe'];
@@ -81,6 +82,7 @@ $('#signup').addEventListener('submit', async (e) => {
   if (!payload.phone) delete payload.phone;
   if (!payload.referral_code) delete payload.referral_code;
   payload.accept_terms = form.accept_terms.checked;
+  payload.preferred_language = currentLanguage() || 'en';
 
   const btn = form.querySelector('button[type=submit]');
   btn.disabled = true; btn.textContent = 'Creating account…';

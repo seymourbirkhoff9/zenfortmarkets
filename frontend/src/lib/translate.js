@@ -56,6 +56,17 @@ function loadGoogle() {
 
 export async function setLanguage(lang) {
   setCookie(lang);
+  try {
+    // If authenticated, sync language to user profile
+    await fetch('/api/auth/me', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'zenfort' },
+      credentials: 'include',
+      body: JSON.stringify({ preferred_language: lang }),
+    });
+  } catch {
+    // Non-blocking for unauthenticated visitors
+  }
   location.reload();                         // Google applies the cookie as the page loads
 }
 

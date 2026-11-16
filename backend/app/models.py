@@ -66,6 +66,7 @@ class User(Base):
     referral_count = Column(Integer, default=0, nullable=False)
     total_referral_earned = Column(Numeric(18, 8), default=Decimal("0.00"), nullable=False)
     display_currency = Column(String(10), nullable=True)  # User's preferred display currency (e.g., "EUR", "NGN")
+    preferred_language = Column(String(10), nullable=False, default="en", server_default="en")  # User's language preference for emails
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -266,4 +267,36 @@ class FxRate(Base):
     is_enabled = Column(Boolean, nullable=False, default=True)
     source = Column(String(50), nullable=True)  # e.g., "open.er-api.com"
     updated_at = Column(DateTime(timezone=True), nullable=True)
+
+
+# ──────────────────────────────────────────────
+# Site Visitors & Traffic Analytics
+# ──────────────────────────────────────────────
+class SiteVisitor(Base):
+    __tablename__ = "site_visitors"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    visitor_id = Column(String(64), unique=True, nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    ip_address = Column(String(100), nullable=True)
+    country = Column(String(100), nullable=True)
+    current_path = Column(String(255), nullable=False)
+    user_agent = Column(Text, nullable=True)
+    device_type = Column(String(50), nullable=True)
+    referrer = Column(Text, nullable=True)
+    first_seen_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    page_views = Column(Integer, default=1, nullable=False)
+
+    user = relationship("User", foreign_keys=[user_id])
+
+
+class VisitorPageView(Base):
+    __tablename__ = "visitor_page_views"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    visitor_id = Column(String(64), index=True, nullable=False)
+    path = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
 

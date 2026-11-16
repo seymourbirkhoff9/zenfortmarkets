@@ -117,6 +117,7 @@ class SignUpRequest(BaseModel):
     phone: Optional[str] = None
     referral_code: Optional[str] = None
     display_currency: Optional[str] = None  # User's preferred display currency (e.g., "EUR")
+    preferred_language: Optional[str] = "en"  # User's preferred language for emails (e.g., "en", "es", "fr")
     # Must be True: the user ticked "I agree to the Terms and Privacy Policy".
     # validate_default: an OMITTED field must fail too (Pydantic skips validators on defaults otherwise).
     accept_terms: bool = Field(default=False, validate_default=True)
@@ -193,6 +194,7 @@ class UserOut(BaseModel):
     terms_accepted_at: Optional[datetime] = None
     totp_enabled: bool = False
     display_currency: Optional[str] = None    # User's preferred display currency
+    preferred_language: str = "en"           # User's preferred language for emails
 
     @field_validator("avatar_url")
     @classmethod
@@ -730,3 +732,39 @@ class RoleUpdate(BaseModel):
 
 class UnreadCount(BaseModel):
     unread: int
+
+
+class VisitorTrackRequest(BaseModel):
+    visitor_id: str
+    path: str
+    referrer: Optional[str] = None
+
+
+class VisitorItem(BaseModel):
+    visitor_id: str
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+    user_name: Optional[str] = None
+    ip_address: Optional[str] = None
+    country: Optional[str] = None
+    current_path: str
+    device_type: Optional[str] = None
+    referrer: Optional[str] = None
+    first_seen_at: datetime
+    last_seen_at: datetime
+    page_views: int
+    is_online: bool
+
+
+class TopPageItem(BaseModel):
+    path: str
+    views: int
+
+
+class AdminVisitorsResponse(BaseModel):
+    active_now: int
+    today_visitors: int
+    today_page_views: int
+    top_pages: List[TopPageItem]
+    recent_visitors: List[VisitorItem]
+
